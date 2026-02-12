@@ -19,6 +19,7 @@ import { getServiceSupabase } from '@/lib/api/service-supabase'
 import { triggerWorkflow } from '@/lib/workflows/workflow-client'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import { BlueskyBotClient, type BlueskyBotConfig } from '@/lib/services/bluesky-client'
+import { logWorkflow } from '@/lib/utils/workflow-logger'
 
 export const maxDuration = 60
 
@@ -69,25 +70,31 @@ async function handleCron(req: Request) {
 
     // ── Proactive Posting ────────────────────────
     if (mode === 'proactive' || mode === 'both') {
-      for (const bot of activeBots) {
-        try {
-          // Check if pet should post now (frequency-based scheduling)
-          const shouldPost = await shouldPetPostNow(bot.petId, bot.frequency)
-          if (!shouldPost) continue
+      const proactiveResults = await Promise.allSettled(activeBots.map(async (bot) => {
+        // Check if pet should post now (frequency-based scheduling)
+        const shouldPost = await shouldPetPostNow(bot.petId, bot.frequency)
+        if (!shouldPost) return null
 
-          const { workflowRunId } = await triggerWorkflow(
-            '/api/v1/workflows/bluesky-agent',
-            {
-              mode: 'proactive' as const,
-              petId: bot.petId
-            },
-            'BLUESKY_AGENT',
-            { retries: 2 }
-          )
-          results.proactive.push(`pet:${bot.petId} run:${workflowRunId}`)
-        } catch (error) {
+        const { workflowRunId } = await triggerWorkflow(
+          '/api/v1/workflows/bluesky-agent',
+          {
+            mode: 'proactive' as const,
+            petId: bot.petId
+          },
+          'BLUESKY_AGENT',
+          { retries: 2 }
+        )
+        return `pet:${bot.petId} run:${workflowRunId}`
+      }))
+
+      for (let i = 0; i < proactiveResults.length; i++) {
+        const result = proactiveResults[i]
+        if (result.status === 'fulfilled' && result.value) {
+          results.proactive.push(result.value)
+        } else if (result.status === 'rejected') {
+          const error = result.reason
           results.errors.push(
-            `proactive pet:${bot.petId} error:${error instanceof Error ? error.message : String(error)}`
+            `proactive pet:${activeBots[i].petId} error:${error instanceof Error ? error.message : String(error)}`
           )
         }
       }
@@ -95,36 +102,44 @@ async function handleCron(req: Request) {
 
     // ── Reactive (Notification Polling) ────────────
     if (mode === 'reactive' || mode === 'both') {
-      for (const bot of activeBots) {
-        try {
-          const notifications = await pollNotifications(bot)
-          for (const notif of notifications) {
-            const { workflowRunId } = await triggerWorkflow(
-              '/api/v1/workflows/bluesky-agent',
-              {
-                mode: 'reactive' as const,
-                petId: bot.petId,
-                notification: {
-                  uri: notif.uri,
-                  cid: notif.cid,
-                  authorHandle: notif.author.handle,
-                  authorDid: notif.author.did,
-                  text: extractNotificationText(notif),
-                  reason: notif.reason as 'mention' | 'reply',
-                  rootUri: extractRootUri(notif),
-                  rootCid: extractRootCid(notif)
-                }
-              },
-              'BLUESKY_AGENT',
-              { retries: 2 }
-            )
-            results.reactive.push(
-              `pet:${bot.petId} notif:${notif.uri} run:${workflowRunId}`
-            )
-          }
-        } catch (error) {
+      const reactiveResults = await Promise.allSettled(activeBots.map(async (bot) => {
+        const notifications = await pollNotifications(bot)
+        const botResults: string[] = []
+        for (const notif of notifications) {
+          const { workflowRunId } = await triggerWorkflow(
+            '/api/v1/workflows/bluesky-agent',
+            {
+              mode: 'reactive' as const,
+              petId: bot.petId,
+              notification: {
+                uri: notif.uri,
+                cid: notif.cid,
+                authorHandle: notif.author.handle,
+                authorDid: notif.author.did,
+                text: extractNotificationText(notif),
+                reason: notif.reason as 'mention' | 'reply',
+                rootUri: extractRootUri(notif),
+                rootCid: extractRootCid(notif)
+              }
+            },
+            'BLUESKY_AGENT',
+            { retries: 2 }
+          )
+          botResults.push(
+            `pet:${bot.petId} notif:${notif.uri} run:${workflowRunId}`
+          )
+        }
+        return botResults
+      }))
+
+      for (let i = 0; i < reactiveResults.length; i++) {
+        const result = reactiveResults[i]
+        if (result.status === 'fulfilled') {
+          results.reactive.push(...result.value)
+        } else {
+          const error = result.reason
           results.errors.push(
-            `reactive pet:${bot.petId} error:${error instanceof Error ? error.message : String(error)}`
+            `reactive pet:${activeBots[i].petId} error:${error instanceof Error ? error.message : String(error)}`
           )
         }
       }
@@ -302,7 +317,9 @@ async function pollNotifications(bot: ActiveBot): Promise<Array<{
       reason: n.reason,
       record: n.record
     }))
-  } catch {
+  } catch (error) {
+    const logger = logWorkflow('BLUESKY_AGENT', 'notification-poll', bot.petId)
+    logger.error(error, `pollNotifications for ${bot.handle}`)
     return []
   }
 }

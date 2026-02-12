@@ -461,7 +461,12 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     }
   }
 
+  private clientCache = new Map<string, BlueskyBotClient>()
+
   private async createAuthenticatedClient(pet: PetData): Promise<BlueskyBotClient> {
+    const cached = this.clientCache.get(pet.id)
+    if (cached?.isAuthenticated) return cached
+
     const config: BlueskyBotConfig = {
       petId: pet.id,
       handle: pet.bluesky_handle,
@@ -470,6 +475,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     }
     const client = new BlueskyBotClient(config)
     await client.authenticate()
+    this.clientCache.set(pet.id, client)
     return client
   }
 
@@ -490,11 +496,15 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       .eq('pet_id', params.petId)
       .single() as { data: { id: string } | null }
 
+    if (!botConfig) {
+      throw new Error(`No bot config found for pet ${params.petId}, cannot log activity`)
+    }
+
     await (supabase as any)
       .from('bluesky_post_log')
       .insert({
         pet_id: params.petId,
-        bot_config_id: botConfig?.id ?? null,
+        bot_config_id: botConfig.id,
         activity_type: params.activityType,
         post_uri: params.postUri ?? null,
         post_cid: params.postCid ?? null,
@@ -555,7 +565,8 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     return data.map(d => {
       const meta = d.metadata
       const type = meta?.interactionType ?? d.activity_type
-      return `[${type}] ${d.content.slice(0, 80)}...`
+      const truncated = d.content.length > 80 ? d.content.slice(0, 80) + '...' : d.content
+      return `[${type}] ${truncated}`
     }).join('\n')
   }
 }

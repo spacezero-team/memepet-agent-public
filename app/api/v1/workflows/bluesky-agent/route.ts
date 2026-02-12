@@ -16,7 +16,7 @@ import {
   type BlueskyAgentWorkflowRequest
 } from '@/lib/workflows/bluesky-agent-workflow'
 import { FLOW_CONTROL_CONFIG, QSTASH_RETRY_CONFIG } from '@/lib/config/flow-control.config'
-import { logWorkflow } from '@/lib/utils/workflow-logger'
+import { logWorkflow, isWorkflowAbort } from '@/lib/utils/workflow-logger'
 
 export const maxDuration = 60
 
@@ -74,10 +74,7 @@ export const { POST } = serve<BlueskyAgentWorkflowRequest>(
       logger.complete({ petId })
     } catch (error) {
       // WorkflowAbort is expected behavior (Upstash replay)
-      if (
-        (error as Error)?.name === 'WorkflowAbort' ||
-        (error as Error)?.message?.includes('WorkflowAbort')
-      ) {
+      if (isWorkflowAbort(error)) {
         throw error
       }
       logger.error(error, 'bluesky-agent.execute')

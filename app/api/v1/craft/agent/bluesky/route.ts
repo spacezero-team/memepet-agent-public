@@ -11,11 +11,25 @@
  * - Get status of all active bots
  */
 
+import { timingSafeEqual } from 'crypto'
 import { NextResponse } from 'next/server'
 import { getServiceSupabase } from '@/lib/api/service-supabase'
 import { triggerWorkflow } from '@/lib/workflows/workflow-client'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import type { BlueskyAgentMode } from '@/lib/workflows/bluesky-agent-workflow'
+
+function verifyApiKey(provided: string | null): boolean {
+  const expected = process.env.API_KEY
+  if (!provided || !expected) return false
+  try {
+    return timingSafeEqual(
+      Buffer.from(provided),
+      Buffer.from(expected)
+    )
+  } catch {
+    return false
+  }
+}
 
 export const maxDuration = 60
 
@@ -31,7 +45,7 @@ export async function POST(req: Request) {
   try {
     // Verify API key
     const apiKey = req.headers.get('x-api-key')
-    if (apiKey !== process.env.API_KEY) {
+    if (!verifyApiKey(apiKey)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -56,6 +70,14 @@ export async function POST(req: Request) {
     }
 
     const mode = body.mode ?? 'proactive'
+
+    const validModes: BlueskyAgentMode[] = ['proactive', 'reactive', 'interaction']
+    if (!validModes.includes(mode)) {
+      return NextResponse.json(
+        { error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` },
+        { status: 400 }
+      )
+    }
 
     if (mode === 'interaction' && !body.targetPetId) {
       return NextResponse.json(
@@ -124,7 +146,7 @@ export async function GET(req: Request) {
   try {
     // Verify API key (same as POST)
     const apiKey = req.headers.get('x-api-key')
-    if (!apiKey || apiKey !== process.env.API_KEY) {
+    if (!verifyApiKey(apiKey)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 

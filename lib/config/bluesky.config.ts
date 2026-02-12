@@ -27,7 +27,7 @@ export const BLUESKY_CONFIG = {
   AGENT_MODE: (process.env.BLUESKY_AGENT_MODE || 'both') as 'reactive' | 'proactive' | 'both',
 
   FEATURE_FLAGS: {
-    ENABLED: process.env.ENABLE_BLUESKY_AGENT !== 'false',
+    ENABLED: process.env.ENABLE_BLUESKY_AGENT === 'true',
     LOG_API: process.env.LOG_BLUESKY_API === 'true',
   }
 } as const
