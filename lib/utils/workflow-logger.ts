@@ -5,7 +5,6 @@
  * Designed for production readability in Vercel Logs
  */
 
-type LogLevel = 'info' | 'warn' | 'error' | 'success'
 type WorkflowType = 'BLUESKY_AGENT'
 
 interface LogContext {

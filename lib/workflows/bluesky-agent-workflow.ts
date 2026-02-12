@@ -95,11 +95,9 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
   private async executeProactivePosting(request: BlueskyAgentWorkflowRequest): Promise<void> {
     const { petId } = request
 
-    // Step 1: Load pet data and authenticate
-    const { pet, client } = await this.context.run('load-pet-and-auth', async () => {
-      const petData = await this.loadPetData(petId)
-      const botClient = await this.createAuthenticatedClient(petData)
-      return { pet: petData, client: botClient }
+    // Step 1: Load pet data
+    const pet = await this.context.run('load-pet-data', async () => {
+      return this.loadPetData(petId)
     })
 
     // Step 2: Get recent posts for context (avoid repetition)

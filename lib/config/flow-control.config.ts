@@ -29,21 +29,8 @@ export const FLOW_CONTROL_CONFIG = {
  * QStash retry configuration
  */
 export const QSTASH_RETRY_CONFIG = {
-  // Default retry settings (limited by QStash account quota)
   DEFAULT: {
-    retries: 5,      // QStash account limit (quota error if >5)
-    delay: '60000'   // 60 seconds between retries for recovery
+    retries: 5,
+    delay: '60000'
   },
-
-  // Critical operations (less retries, longer delay)
-  CRITICAL: {
-    retries: 3,      // Stay well under account limit
-    delay: '90000'   // 90 seconds (1.5 minutes) for recovery
-  },
-
-  // Resilient operations (max allowed by account)
-  RESILIENT: {
-    retries: 5,      // Maximum allowed by QStash account
-    delay: 'pow(2, retried) * 10000'  // Exponential: 10s, 20s, 40s, 80s, 160s
-  }
 } as const

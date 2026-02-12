@@ -3,16 +3,5 @@
     "app/api/v1/workflows/*/route.ts": {
       "maxDuration": 60
     }
-  },
-  "headers": [
-    {
-      "source": "/api/v1/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        }
-      ]
-    }
-  ]
+  }
 }
