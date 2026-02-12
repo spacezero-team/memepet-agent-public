@@ -386,19 +386,18 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
   private async loadPetData(petId: string): Promise<PetData> {
     const supabase = getServiceSupabase()
 
-    // Load pet with personality
-    // Note: pet table uses 'name' (not 'pet_name') and 'psyche' (not 'meme_personality')
-    const { data: pet, error } = await supabase
+    // Load pet with both psyche (emotional state) and meme (personality/voice) columns
+    const { data: pet, error } = await (supabase as any)
       .from('pet')
-      .select('id, name, psyche')
+      .select('id, name, personality_type, psyche, meme')
       .eq('id', petId)
-      .single()
+      .single() as { data: { id: string; name: string; personality_type: string | null; psyche: Record<string, unknown> | null; meme: Record<string, unknown> | null } | null; error: { message: string } | null }
 
     if (error || !pet) {
       throw new Error(`Pet ${petId} not found: ${error?.message}`)
     }
 
-    // Load Bluesky bot config separately (table not yet in generated types)
+    // Load Bluesky bot config separately
     const { data: botConfig } = await (supabase as any)
       .from('bluesky_bot_config')
       .select('handle, did, app_password')
@@ -409,10 +408,53 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       throw new Error(`No Bluesky bot config for pet ${petId}`)
     }
 
+    // Build MemePetPersonalityData from psyche + meme columns
+    const psyche = (pet.psyche ?? {}) as Record<string, unknown>
+    const meme = (pet.meme ?? {}) as Record<string, unknown>
+    const memePersonality = (meme.personality ?? {}) as Record<string, unknown>
+    const psycheTraits = (psyche.traits ?? {}) as Record<string, number>
+    const speechStyle = (memePersonality.speechStyle ?? {}) as Record<string, unknown>
+    const interactionPrefs = (memePersonality.interactionPreferences ?? {}) as Record<string, number>
+
+    const personality: MemePetPersonalityData = {
+      personalityType: pet.personality_type ?? (memePersonality.archetype as string) ?? 'unknown',
+      traits: {
+        playfulness: psycheTraits.playfulness ?? 0.5,
+        independence: psycheTraits.independence ?? 0,
+        curiosity: psycheTraits.curiosity ?? 0.5,
+        expressiveness: psycheTraits.expressiveness ?? 0.5,
+      },
+      dominantEmotion: (psyche.dominant_emotion as string) ?? 'neutral',
+      innerMonologue: (psyche.inner_monologue as string) ?? '',
+      memeVoice: {
+        humorStyle: (memePersonality.humorStyle as string) ?? (meme.humor as string) ?? 'general',
+        catchphrase: Array.isArray(memePersonality.catchphrases)
+          ? (memePersonality.catchphrases as string[])[0] ?? ''
+          : '',
+        reactionPatterns: Array.isArray(speechStyle.quirks)
+          ? (speechStyle.quirks as string[])
+          : [],
+        postingStyle: (speechStyle.tone as string) ?? 'casual',
+      },
+      postingConfig: {
+        frequency: 'medium',
+        topicAffinity: Array.isArray(memePersonality.topicsOfInterest)
+          ? (memePersonality.topicsOfInterest as string[])
+          : [],
+        engagementStyle: (speechStyle.vocabulary as string) ?? 'internet slang',
+      },
+      socialStyle: {
+        approachability: ((interactionPrefs.friendliness ?? 50) - 50) / 50,
+        competitiveness: ((interactionPrefs.sassiness ?? 50) - 50) / 50,
+        dramaTendency: ((interactionPrefs.chaosLevel ?? 50) - 50) / 50,
+        loyaltyDepth: 0.5,
+      },
+    }
+
     return {
       id: pet.id,
       pet_name: pet.name,
-      meme_personality: (pet.psyche ?? {}) as unknown as MemePetPersonalityData,
+      meme_personality: personality,
       bluesky_handle: botConfig.handle,
       bluesky_did: botConfig.did ?? null,
       bluesky_app_password: botConfig.app_password
