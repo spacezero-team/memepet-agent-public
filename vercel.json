@@ -1,7 +1,7 @@
 {
   "functions": {
     "app/api/v1/workflows/*/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 60
     }
   },
   "headers": [

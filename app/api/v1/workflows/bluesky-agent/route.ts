@@ -18,7 +18,7 @@ import {
 import { FLOW_CONTROL_CONFIG, QSTASH_RETRY_CONFIG } from '@/lib/config/flow-control.config'
 import { logWorkflow } from '@/lib/utils/workflow-logger'
 
-export const maxDuration = 800
+export const maxDuration = 60
 
 // GET handler for QStash callbacks
 export async function GET() {

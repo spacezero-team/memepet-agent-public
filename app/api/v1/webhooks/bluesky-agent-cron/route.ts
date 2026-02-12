@@ -20,7 +20,7 @@ import { triggerWorkflow } from '@/lib/workflows/workflow-client'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import { BlueskyBotClient, type BlueskyBotConfig } from '@/lib/services/bluesky-client'
 
-export const maxDuration = 300
+export const maxDuration = 60
 
 // QStash signature verification: fail closed in production
 const isProduction = process.env.NODE_ENV === 'production'
