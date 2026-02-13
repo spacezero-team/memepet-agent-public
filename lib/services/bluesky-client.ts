@@ -97,7 +97,20 @@ export class BlueskyBotClient {
   constructor(
     private readonly config: BlueskyBotConfig
   ) {
-    this.agent = new AtpAgent({ service: BLUESKY_CONFIG.SERVICE_URL })
+    this.agent = new AtpAgent({
+      service: BlueskyBotClient.resolveServiceUrl(config.handle)
+    })
+  }
+
+  /**
+   * Route bots to the correct PDS based on handle suffix.
+   * *.0.space handles → pds.0.space, all others → default SERVICE_URL (bsky.social)
+   */
+  private static resolveServiceUrl(handle: string): string {
+    if (handle.endsWith('.0.space')) {
+      return 'https://pds.0.space'
+    }
+    return BLUESKY_CONFIG.SERVICE_URL
   }
 
   /**
@@ -105,6 +118,10 @@ export class BlueskyBotClient {
    * Tries to resume session from DB first, falls back to fresh login.
    */
   async authenticate(): Promise<void> {
+    console.info(
+      `[BlueskyBot] Authenticating ${this.config.handle} → ${this.agent.service.toString()}`
+    )
+
     // Try resuming persisted session
     const persisted = await this.loadPersistedSession()
     if (persisted) {
