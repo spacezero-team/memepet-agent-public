@@ -8,7 +8,7 @@
  * @module bluesky-client
  */
 
-import { AtpAgent, RichText } from '@atproto/api'
+import { AtpAgent, RichText, BlobRef } from '@atproto/api'
 import type { AppBskyFeedPost, AppBskyFeedDefs, AppBskyNotificationListNotifications } from '@atproto/api'
 import { BLUESKY_CONFIG, AT_PROTO_RATE_LIMITS } from '@/lib/config/bluesky.config'
 import { getServiceSupabase } from '@/lib/api/service-supabase'
@@ -243,6 +243,37 @@ export class BlueskyBotClient {
   async like(uri: string, cid: string): Promise<void> {
     this.ensureAuthenticated()
     await this.agent.like(uri, cid)
+  }
+
+  /**
+   * Set profile avatar and display name.
+   * Downloads image from URL, uploads as blob, then updates profile.
+   */
+  async setProfile(params: {
+    displayName: string
+    description?: string
+    avatarUrl?: string
+  }): Promise<void> {
+    this.ensureAuthenticated()
+
+    let avatarBlob: BlobRef | undefined
+
+    if (params.avatarUrl) {
+      const imageResponse = await fetch(params.avatarUrl)
+      const imageBuffer = new Uint8Array(await imageResponse.arrayBuffer())
+
+      const uploadResult = await this.agent.uploadBlob(imageBuffer, {
+        encoding: imageResponse.headers.get('content-type') ?? 'image/jpeg'
+      })
+      avatarBlob = uploadResult.data.blob
+    }
+
+    await this.agent.upsertProfile((existing) => ({
+      ...existing,
+      displayName: params.displayName,
+      ...(params.description !== undefined ? { description: params.description } : {}),
+      ...(avatarBlob ? { avatar: avatarBlob } : {})
+    }))
   }
 
   /**
