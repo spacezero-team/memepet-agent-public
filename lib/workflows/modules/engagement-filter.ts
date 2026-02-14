@@ -44,10 +44,6 @@ export function preFilterCandidates(
       return { candidate, filtered: true, filterReason: 'own_post' }
     }
 
-    if (otherPetDids.has(candidate.authorDid)) {
-      return { candidate, filtered: true, filterReason: 'other_pet' }
-    }
-
     if (SENSITIVE_KEYWORDS.some(kw => textLower.includes(kw))) {
       return { candidate, filtered: true, filterReason: 'sensitive_content' }
     }
