@@ -403,7 +403,7 @@ export class BlueskyBotClient {
 
   private ensureCooldown(): void {
     const elapsed = Date.now() - this.lastInteractionAt
-    const minCooldown = BLUESKY_CONFIG.POSTING.COOLDOWN_BETWEEN_INTERACTIONS_MS / 10
+    const minCooldown = 5_000 // 5 seconds between posts/replies
     if (elapsed < minCooldown) {
       throw new Error(
         `Cooldown not met for ${this.config.handle}. Wait ${Math.ceil((minCooldown - elapsed) / 1000)}s`

@@ -116,15 +116,12 @@ const EngagementBatchResultSchema = z.object({
   engagements: z.array(z.object({
     postIndex: z.number().describe('Index of the post in candidates array (0-based)'),
     action: z.enum(['like', 'comment', 'like_and_comment', 'skip']),
-    comment: z.string().trim().max(300).optional(),
-    tone: z.enum([
-      'friendly', 'sarcastic', 'supportive', 'curious',
-      'impressed', 'playful', 'contrarian', 'enthusiastic'
-    ]),
-    relevanceScore: z.number().min(0).max(10),
-    reasoning: z.string().trim().max(150),
-  })).min(1),
-  sessionMood: z.string().trim().max(50),
+    comment: z.string().optional().describe('Required when action is comment or like_and_comment'),
+    tone: z.string().describe('Tone of engagement: friendly, sarcastic, supportive, curious, impressed, playful, contrarian, or enthusiastic'),
+    relevanceScore: z.number().describe('Relevance score 0-10'),
+    reasoning: z.string().describe('Brief reasoning for this decision'),
+  })),
+  sessionMood: z.string().describe('Overall mood for this engagement session'),
 })
 
 export type GeneratedPost = z.infer<typeof GeneratedPostSchema>
