@@ -446,7 +446,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return
     }
 
-    const engagedAuthors = await this.context.run('get-engaged-authors', async () => {
+    const engagedAuthorsList = await this.context.run('get-engaged-authors', async () => {
       const supabase = getServiceSupabase()
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
@@ -457,14 +457,16 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         .in('activity_type', ['engagement_comment', 'engagement_like'])
         .gte('created_at', since) as { data: Array<{ metadata: Record<string, unknown> }> | null }
 
-      return new Set<string>(
-        data?.map(d => d.metadata?.engagedAuthorHandle as string).filter(Boolean) ?? []
-      )
+      // Return array (not Set) because Set is not JSON-serializable
+      // and Upstash Workflow serializes step results via JSON
+      return (data?.map(d => d.metadata?.engagedAuthorHandle as string).filter(Boolean) ?? []) as string[]
     })
 
     const maxEngagements = this.computeMaxEngagements(pet.meme_personality)
 
     const decisions = await this.context.run('evaluate-candidates', async () => {
+      // Convert back to Set for the evaluator
+      const engagedAuthors = new Set(engagedAuthorsList)
       return evaluateEngagementCandidates(
         pet.meme_personality,
         pet.pet_name,
