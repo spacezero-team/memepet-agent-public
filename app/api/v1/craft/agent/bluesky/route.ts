@@ -71,7 +71,7 @@ export async function POST(req: Request) {
 
     const mode = body.mode ?? 'proactive'
 
-    const validModes: BlueskyAgentMode[] = ['proactive', 'reactive', 'interaction']
+    const validModes: BlueskyAgentMode[] = ['proactive', 'reactive', 'interaction', 'engagement']
     if (!validModes.includes(mode)) {
       return NextResponse.json(
         { error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` },
