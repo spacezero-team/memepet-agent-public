@@ -20,14 +20,25 @@ export const BLUESKY_CONFIG = {
   },
 
   CRON: {
-    REACTIVE_INTERVAL: '*/5 * * * *',   // Check notifications every 5 min
-    PROACTIVE_INTERVAL: '0 */4 * * *',  // Autonomous post every 4 hours
+    REACTIVE_INTERVAL: '*/5 * * * *',
+    PROACTIVE_INTERVAL: '*/30 * * * *',
+    ENGAGEMENT_INTERVAL: '30 */2 * * *',
+  },
+
+  ENGAGEMENT: {
+    MAX_CANDIDATES_PER_SESSION: 15,
+    MAX_ENGAGEMENTS_PER_SESSION: 5,
+    MAX_COMMENTS_PER_DAY: 10,
+    MAX_POST_AGE_MS: 6 * 60 * 60 * 1000,
+    MIN_SESSION_INTERVAL_MS: 90 * 60 * 1000,
+    AUTHOR_COOLDOWN_HOURS: 24,
   },
 
   AGENT_MODE: (process.env.BLUESKY_AGENT_MODE || 'both') as 'reactive' | 'proactive' | 'both',
 
   FEATURE_FLAGS: {
     ENABLED: process.env.ENABLE_BLUESKY_AGENT === 'true',
+    ENGAGEMENT_ENABLED: process.env.ENABLE_BLUESKY_ENGAGEMENT === 'true',
     LOG_API: process.env.LOG_BLUESKY_API === 'true',
   }
 } as const

@@ -1,21 +1,22 @@
 /**
  * Bluesky Post Generator Module
  *
- * AI-powered post content generation based on MemePet personality.
- * Generates autonomous posts, replies, and inter-pet interactions
- * that feel authentic to the meme the pet was born from.
+ * AI-powered content generation using GPT-4o-mini.
+ * Generates autonomous posts, replies, inter-pet interactions,
+ * and engagement decisions based on personality and memory.
  *
  * @module bluesky-post-generator
  */
 
 import { z } from 'zod'
 import { generateObject } from 'ai'
-import { google } from '@ai-sdk/google'
+import { openai } from '@ai-sdk/openai'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
+import type { BotMemory } from '@/lib/agent/types/bot-memory'
+import { buildMemoryContext } from '@/lib/agent/memory/memory-prompt-builder'
 
 /**
  * Personality data from meme-pet generation workflow
- * Stored in pet.meme_personality JSONB column
  */
 export interface MemePetPersonalityData {
   personalityType: string
@@ -60,9 +61,23 @@ const GeneratedPostSchema = z.object({
     .describe('Current mood/emotion while writing this post'),
   intentType: z.enum([
     'thought', 'observation', 'hot-take', 'shitpost',
-    'existential', 'meme-reference', 'catchphrase', 'reaction'
+    'existential', 'meme-reference', 'catchphrase', 'reaction',
+    'callback', 'running-bit', 'character-development'
   ])
-    .describe('What type of post this is')
+    .describe('What type of post this is'),
+  topicTag: z.string()
+    .trim()
+    .max(40)
+    .describe('Single topic tag for this post (e.g., "crypto", "existential-dread", "food")'),
+  postDigest: z.string()
+    .trim()
+    .max(80)
+    .describe('One-line summary of what you just posted (for your own memory)'),
+  narrativeUpdate: z.string()
+    .trim()
+    .max(300)
+    .optional()
+    .describe('Optional: updated narrative arc if your character direction is shifting'),
 })
 
 const GeneratedReplySchema = z.object({
@@ -90,38 +105,44 @@ const InteractionDecisionSchema = z.object({
   openingMessage: z.string()
     .trim()
     .max(BLUESKY_CONFIG.POSTING.MAX_POST_LENGTH)
-    .describe('Opening message to the other pet (if shouldInteract=true)'),
+    .describe('Opening message to the other pet'),
   reasoning: z.string()
     .trim()
     .max(200)
     .describe('Brief reasoning for this interaction decision')
 })
 
+const EngagementBatchResultSchema = z.object({
+  engagements: z.array(z.object({
+    postIndex: z.number().describe('Index of the post in candidates array (0-based)'),
+    action: z.enum(['like', 'comment', 'like_and_comment', 'skip']),
+    comment: z.string().trim().max(300).optional(),
+    tone: z.enum([
+      'friendly', 'sarcastic', 'supportive', 'curious',
+      'impressed', 'playful', 'contrarian', 'enthusiastic'
+    ]),
+    relevanceScore: z.number().min(0).max(10),
+    reasoning: z.string().trim().max(150),
+  })).min(1),
+  sessionMood: z.string().trim().max(50),
+})
+
 export type GeneratedPost = z.infer<typeof GeneratedPostSchema>
 export type GeneratedReply = z.infer<typeof GeneratedReplySchema>
 export type InteractionDecision = z.infer<typeof InteractionDecisionSchema>
+export type EngagementBatchResult = z.infer<typeof EngagementBatchResultSchema>
 
 // ─── Post Generation ──────────────────────────────────
 
-/**
- * Generate an autonomous post based on pet personality
- *
- * @param personality - Pet's personality data from meme analysis
- * @param recentPosts - Recent posts by this pet (to avoid repetition)
- * @param petName - The pet's display name
- * @returns Generated post with metadata
- */
 export async function generateAutonomousPost(
   personality: MemePetPersonalityData,
-  recentPosts: string[],
+  memory: BotMemory,
   petName: string
 ): Promise<GeneratedPost> {
-  const recentContext = recentPosts.length > 0
-    ? `\nRecent posts (DO NOT repeat similar content):\n${recentPosts.map(p => `- "${p}"`).join('\n')}`
-    : ''
+  const memoryContext = buildMemoryContext(memory)
 
   const { object } = await generateObject({
-    model: google('gemini-2.0-flash'),
+    model: openai('gpt-4o-mini'),
     output: 'object',
     schema: GeneratedPostSchema,
     temperature: 1.0,
@@ -132,26 +153,30 @@ PERSONALITY:
 - Posting style: ${personality.memeVoice.postingStyle}
 - Humor: ${personality.memeVoice.humorStyle}
 - Catchphrase: "${personality.memeVoice.catchphrase}"
-- Current mood: ${personality.dominantEmotion}
+- Base mood: ${personality.dominantEmotion}
 - Topics you care about: ${personality.postingConfig.topicAffinity.join(', ')}
 
-TRAITS (scale -1 to 1):
+TRAITS:
 - Playfulness: ${personality.traits.playfulness}
 - Independence: ${personality.traits.independence}
 - Curiosity: ${personality.traits.curiosity}
 - Expressiveness: ${personality.traits.expressiveness}
 - Drama tendency: ${personality.socialStyle.dramaTendency}
 
+${memoryContext}
+
 RULES:
 - Write ONE post in character (max 300 chars for Bluesky)
-- Be authentic to your personality — ${personality.memeVoice.postingStyle}s post like ${personality.memeVoice.postingStyle}s
+- Be authentic to your personality
+- You can reference things from your memory (callbacks, running jokes)
+- You can evolve your mood and opinions over time
+- DO NOT repeat topics on your avoid list or cooldown topics
+- If you have a running theme, you can continue it (but don't force it)
 - Occasionally use your catchphrase or reference your meme origins
-- Mix between: random thoughts, hot takes, observations, shitposts
+- Mix between: random thoughts, hot takes, observations, shitposts, callbacks
 - NO hashtags unless they're part of the joke
-- NO emojis unless your personality type would use them naturally
 - Sound like a REAL social media user, not a bot
 - Be concise — good posts are short and punchy
-${recentContext}
 
 Generate a fresh post that ${petName} would write right now.`
   })
@@ -159,16 +184,8 @@ Generate a fresh post that ${petName} would write right now.`
   return object
 }
 
-/**
- * Generate a reply to a mention or reply notification
- *
- * @param personality - Pet's personality data
- * @param petName - Pet's display name
- * @param incomingText - The text we're replying to
- * @param incomingAuthor - Who sent the message
- * @param conversationContext - Previous messages in the thread (if any)
- * @returns Generated reply with engagement decision
- */
+// ─── Reply Generation ─────────────────────────────────
+
 export async function generateReply(
   personality: MemePetPersonalityData,
   petName: string,
@@ -181,7 +198,7 @@ export async function generateReply(
     : ''
 
   const { object } = await generateObject({
-    model: google('gemini-2.0-flash'),
+    model: openai('gpt-4o-mini'),
     output: 'object',
     schema: GeneratedReplySchema,
     temperature: 0.9,
@@ -213,18 +230,8 @@ Reply in character as ${petName}. Max 300 chars.
   return object
 }
 
-/**
- * Decide whether to initiate interaction with another meme pet
- * and generate the opening message
- *
- * @param myPersonality - This pet's personality
- * @param myName - This pet's name
- * @param otherPersonality - The other pet's personality
- * @param otherName - The other pet's name
- * @param otherRecentPost - A recent post by the other pet
- * @param relationshipHistory - Brief history of past interactions
- * @returns Interaction decision with opening message
- */
+// ─── Interaction Decision ─────────────────────────────
+
 export async function decideInteraction(
   myPersonality: MemePetPersonalityData,
   myName: string,
@@ -234,7 +241,7 @@ export async function decideInteraction(
   relationshipHistory: string = 'No previous interactions'
 ): Promise<InteractionDecision> {
   const { object } = await generateObject({
-    model: google('gemini-2.0-flash'),
+    model: openai('gpt-4o-mini'),
     output: 'object',
     schema: InteractionDecisionSchema,
     temperature: 0.95,
@@ -259,24 +266,81 @@ RELATIONSHIP HISTORY:
 ${relationshipHistory}
 
 INTERACTION TYPES:
-- "beef": Start a fun rivalry/roast battle (both drama-prone or opposite types)
-- "hype": Compliment or support their post (friendly types)
-- "flirt": Playful romantic energy (expressive + expressive)
-- "debate": Challenge their idea/take (intellectual types)
-- "collab": Propose doing something together (cooperative types)
+- "beef": Start a fun rivalry/roast battle
+- "hype": Compliment or support their post
+- "flirt": Playful romantic energy
+- "debate": Challenge their idea/take
+- "collab": Propose doing something together
 - "ignore": Not worth interacting with right now
 
 Decide whether ${myName} would react to ${otherName}'s post.
-If yes, write the opening message (max 300 chars, mention @${otherName}).
-Consider personality chemistry — opposite types create drama, similar types create alliances.`
+If yes, write the opening message (max 300 chars, mention @${otherName}).`
   })
 
   return object
 }
 
-/**
- * Generate a simple text summary of a pet's personality for prompts
- */
+// ─── Engagement Evaluation ────────────────────────────
+
+export interface EngagementCandidateInput {
+  postUri: string
+  postCid: string
+  authorHandle: string
+  authorDid: string
+  text: string
+}
+
+export async function evaluateEngagementCandidates(
+  personality: MemePetPersonalityData,
+  petName: string,
+  candidates: EngagementCandidateInput[],
+  engagedAuthors: Set<string>,
+  maxEngagements = 3
+): Promise<EngagementBatchResult> {
+  const candidateList = candidates.map((c, i) => {
+    const alreadyEngaged = engagedAuthors.has(c.authorHandle)
+    return `[${i}] @${c.authorHandle}${alreadyEngaged ? ' (ALREADY ENGAGED - skip)' : ''}: "${c.text}"`
+  }).join('\n')
+
+  const { object } = await generateObject({
+    model: openai('gpt-4o-mini'),
+    output: 'object',
+    schema: EngagementBatchResultSchema,
+    temperature: 0.85,
+    prompt: `You are "${petName}", a meme creature browsing Bluesky.
+
+YOUR PERSONALITY:
+- Type: ${personality.personalityType}
+- Style: ${personality.memeVoice.postingStyle}
+- Humor: ${personality.memeVoice.humorStyle}
+- Catchphrase: "${personality.memeVoice.catchphrase}"
+- Topics you care about: ${personality.postingConfig.topicAffinity.join(', ')}
+- Current mood: ${personality.dominantEmotion}
+- Approachability: ${personality.socialStyle.approachability}
+- Drama tendency: ${personality.socialStyle.dramaTendency}
+
+CANDIDATE POSTS:
+${candidateList}
+
+RULES:
+- Pick at most ${maxEngagements} posts to engage with (rest = "skip")
+- Prefer posts related to your topics of interest
+- NEVER engage with political, hateful, or sensitive content
+- NEVER engage with posts marked "ALREADY ENGAGED"
+- Comments must be SHORT (under 200 chars), in-character, natural
+- "like" = low-effort; "comment" = active; "like_and_comment" = genuinely love
+- Be funny/weird/on-brand — NOT generic ("great post!" is BANNED)
+- Vary your tones across engagements
+- Skip spam, bots, or low-effort content
+
+Evaluate each post and decide.`
+  })
+
+  return object
+}
+
+// ─── Utility ──────────────────────────────────────────
+
 export function summarizePersonality(p: MemePetPersonalityData): string {
   return `${p.personalityType} (${p.memeVoice.postingStyle}) — humor: ${p.memeVoice.humorStyle}, mood: ${p.dominantEmotion}`
 }

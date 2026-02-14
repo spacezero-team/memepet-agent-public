@@ -9,8 +9,9 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@atproto/api": "^0.18.21",
     "@ai-sdk/google": "^2.0.13",
+    "@ai-sdk/openai": "^2.0.91",
+    "@atproto/api": "^0.18.21",
     "@supabase/supabase-js": "^2.49.1",
     "@upstash/qstash": "^2.7.21",
     "@upstash/workflow": "^0.2.23",

@@ -8,7 +8,7 @@
  * @module bluesky-client
  */
 
-import { AtpAgent, RichText } from '@atproto/api'
+import { AtpAgent, RichText, BlobRef } from '@atproto/api'
 import type { AppBskyFeedPost, AppBskyFeedDefs, AppBskyNotificationListNotifications } from '@atproto/api'
 import { BLUESKY_CONFIG, AT_PROTO_RATE_LIMITS } from '@/lib/config/bluesky.config'
 import { getServiceSupabase } from '@/lib/api/service-supabase'
@@ -243,6 +243,79 @@ export class BlueskyBotClient {
   async like(uri: string, cid: string): Promise<void> {
     this.ensureAuthenticated()
     await this.agent.like(uri, cid)
+  }
+
+  /**
+   * Set profile avatar and display name.
+   * Downloads image from URL, uploads as blob, then updates profile.
+   */
+  async setProfile(params: {
+    displayName: string
+    description?: string
+    avatarUrl?: string
+  }): Promise<void> {
+    this.ensureAuthenticated()
+
+    let avatarBlob: BlobRef | undefined
+
+    if (params.avatarUrl) {
+      const imageResponse = await fetch(params.avatarUrl)
+      const imageBuffer = new Uint8Array(await imageResponse.arrayBuffer())
+
+      const uploadResult = await this.agent.uploadBlob(imageBuffer, {
+        encoding: imageResponse.headers.get('content-type') ?? 'image/jpeg'
+      })
+      avatarBlob = uploadResult.data.blob
+    }
+
+    await this.agent.upsertProfile((existing) => ({
+      ...existing,
+      displayName: params.displayName,
+      ...(params.description !== undefined ? { description: params.description } : {}),
+      ...(avatarBlob ? { avatar: avatarBlob } : {})
+    }))
+  }
+
+  /**
+   * Fetch the bot's home timeline (posts from followed accounts)
+   */
+  async getTimeline(limit = 30, cursor?: string): Promise<{
+    feed: AppBskyFeedDefs.FeedViewPost[]
+    cursor?: string
+  }> {
+    this.ensureAuthenticated()
+    const response = await this.agent.getTimeline({ limit, cursor })
+    return {
+      feed: response.data.feed,
+      cursor: response.data.cursor,
+    }
+  }
+
+  /**
+   * Search posts by query string
+   */
+  async searchPosts(params: {
+    query: string
+    sort?: 'top' | 'latest'
+    limit?: number
+    since?: string
+  }): Promise<AppBskyFeedDefs.PostView[]> {
+    this.ensureAuthenticated()
+    const response = await this.agent.app.bsky.feed.searchPosts({
+      q: params.query,
+      sort: params.sort ?? 'top',
+      limit: params.limit ?? 20,
+      since: params.since,
+    })
+    return response.data.posts
+  }
+
+  /**
+   * Follow an account
+   */
+  async follow(did: string): Promise<void> {
+    this.ensureAuthenticated()
+    await this.agent.follow(did)
   }
 
   /**

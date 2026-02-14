@@ -20,6 +20,8 @@ import { triggerWorkflow } from '@/lib/workflows/workflow-client'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import { BlueskyBotClient, type BlueskyBotConfig } from '@/lib/services/bluesky-client'
 import { logWorkflow } from '@/lib/utils/workflow-logger'
+import { evaluatePostingDecision, emptyScheduleState, type PetScheduleState, type Chronotype } from '@/lib/agent/posting-rhythm'
+import { buildPersonalityFromRow } from '@/lib/agent/pet-personality-builder'
 
 export const maxDuration = 60
 
@@ -58,6 +60,7 @@ async function handleCron(req: Request) {
     proactive: [] as string[],
     reactive: [] as string[],
     interactions: [] as string[],
+    engagements: [] as string[],
     errors: [] as string[]
   }
 
@@ -71,20 +74,29 @@ async function handleCron(req: Request) {
     // ── Proactive Posting ────────────────────────
     if (mode === 'proactive' || mode === 'both') {
       const proactiveResults = await Promise.allSettled(activeBots.map(async (bot) => {
-        // Check if pet should post now (frequency-based scheduling)
-        const shouldPost = await shouldPetPostNow(bot.petId, bot.frequency)
-        if (!shouldPost) return null
+        const personality = await loadPetPersonality(bot.petId)
+        if (!personality) return null
+
+        const decision = evaluatePostingDecision({
+          now: new Date(),
+          state: bot.scheduleState,
+          frequency: bot.frequency,
+          chronotype: bot.chronotype,
+          personality,
+          utcOffsetHours: bot.utcOffsetHours,
+        })
+
+        await persistScheduleState(bot.petId, decision.updatedState)
+
+        if (!decision.shouldPost) return null
 
         const { workflowRunId } = await triggerWorkflow(
           '/api/v1/workflows/bluesky-agent',
-          {
-            mode: 'proactive' as const,
-            petId: bot.petId
-          },
+          { mode: 'proactive' as const, petId: bot.petId },
           'BLUESKY_AGENT',
           { retries: 2 }
         )
-        return `pet:${bot.petId} run:${workflowRunId}`
+        return `pet:${bot.petId} run:${workflowRunId} (${decision.reason})`
       }))
 
       for (let i = 0; i < proactiveResults.length; i++) {
@@ -171,6 +183,34 @@ async function handleCron(req: Request) {
       }
     }
 
+    // ── Proactive Engagement ────────────────────────
+    if (mode === 'engagement' || mode === 'both') {
+      const engagementResults = await Promise.allSettled(activeBots.map(async (bot) => {
+        const shouldEngage = await shouldPetEngageNow(bot.petId)
+        if (!shouldEngage) return null
+
+        const { workflowRunId } = await triggerWorkflow(
+          '/api/v1/workflows/bluesky-agent',
+          { mode: 'engagement' as const, petId: bot.petId },
+          'BLUESKY_AGENT',
+          { retries: 1 }
+        )
+        return `pet:${bot.petId} run:${workflowRunId}`
+      }))
+
+      for (let i = 0; i < engagementResults.length; i++) {
+        const result = engagementResults[i]
+        if (result.status === 'fulfilled' && result.value) {
+          results.engagements.push(result.value)
+        } else if (result.status === 'rejected') {
+          const error = result.reason
+          results.errors.push(
+            `engagement pet:${activeBots[i].petId} error:${error instanceof Error ? error.message : String(error)}`
+          )
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       mode,
@@ -196,6 +236,9 @@ interface ActiveBot {
   did: string | null
   appPassword: string
   frequency: 'high' | 'medium' | 'low'
+  chronotype: Chronotype
+  scheduleState: PetScheduleState
+  utcOffsetHours: number
 }
 
 // ─── Data Loading ──────────────────────────────────
@@ -209,9 +252,16 @@ async function loadActiveBots(): Promise<ActiveBot[]> {
       handle,
       did,
       app_password,
-      posting_frequency
+      posting_frequency,
+      chronotype,
+      schedule_state,
+      utc_offset_hours
     `)
-    .eq('is_active', true) as { data: Array<{ pet_id: string; handle: string; did: string | null; app_password: string; posting_frequency: string }> | null; error: any }
+    .eq('is_active', true) as { data: Array<{
+      pet_id: string; handle: string; did: string | null; app_password: string;
+      posting_frequency: string; chronotype: string | null;
+      schedule_state: Record<string, unknown> | null; utc_offset_hours: number | null
+    }> | null; error: any }
 
   if (error || !data) return []
 
@@ -220,48 +270,11 @@ async function loadActiveBots(): Promise<ActiveBot[]> {
     handle: row.handle,
     did: row.did,
     appPassword: row.app_password,
-    frequency: (row.posting_frequency as 'high' | 'medium' | 'low') ?? 'medium'
+    frequency: (row.posting_frequency as 'high' | 'medium' | 'low') ?? 'medium',
+    chronotype: (row.chronotype as Chronotype) ?? 'normal',
+    scheduleState: (row.schedule_state as unknown as PetScheduleState) ?? emptyScheduleState(),
+    utcOffsetHours: row.utc_offset_hours ?? -5,
   }))
-}
-
-// ─── Scheduling Logic ──────────────────────────────
-
-async function shouldPetPostNow(
-  petId: string,
-  frequency: 'high' | 'medium' | 'low'
-): Promise<boolean> {
-  const supabase = getServiceSupabase()
-
-  // Check last proactive post time
-  const { data } = await (supabase as any)
-    .from('bluesky_post_log')
-    .select('created_at')
-    .eq('pet_id', petId)
-    .eq('activity_type', 'proactive_post')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle() as { data: { created_at: string } | null }
-
-  if (!data) return true // Never posted, should post
-
-  const lastPostAt = new Date(data.created_at).getTime()
-  const now = Date.now()
-  const elapsed = now - lastPostAt
-
-  // Minimum interval based on frequency
-  // high: 2-3h, medium: 3-6h, low: 8-12h
-  const intervals: Record<string, number> = {
-    high: 2 * 60 * 60 * 1000,     // 2 hours
-    medium: 4 * 60 * 60 * 1000,   // 4 hours
-    low: 8 * 60 * 60 * 1000       // 8 hours
-  }
-
-  const minInterval = intervals[frequency] ?? intervals.medium
-
-  // Add some randomness (±30%) to avoid all bots posting simultaneously
-  const jitter = minInterval * (0.7 + Math.random() * 0.6)
-
-  return elapsed >= jitter
 }
 
 // ─── Notification Polling ──────────────────────────
@@ -337,6 +350,45 @@ function extractRootUri(notif: { record: unknown }): string | undefined {
 function extractRootCid(notif: { record: unknown }): string | undefined {
   const record = notif.record as { reply?: { root?: { cid?: string } } } | null
   return record?.reply?.root?.cid
+}
+
+// ─── Scheduling Helpers ──────────────────────────────
+
+async function persistScheduleState(petId: string, state: PetScheduleState): Promise<void> {
+  const supabase = getServiceSupabase()
+  await (supabase as any)
+    .from('bluesky_bot_config')
+    .update({ schedule_state: state })
+    .eq('pet_id', petId)
+}
+
+async function loadPetPersonality(petId: string) {
+  const supabase = getServiceSupabase()
+  const { data } = await (supabase as any)
+    .from('pet')
+    .select('personality_type, psyche, meme')
+    .eq('id', petId)
+    .single() as { data: { personality_type: string | null; psyche: Record<string, unknown> | null; meme: Record<string, unknown> | null } | null }
+
+  if (!data) return null
+  return buildPersonalityFromRow(data)
+}
+
+async function shouldPetEngageNow(petId: string): Promise<boolean> {
+  const supabase = getServiceSupabase()
+  const { data } = await (supabase as any)
+    .from('bluesky_post_log')
+    .select('created_at')
+    .eq('pet_id', petId)
+    .in('activity_type', ['engagement_comment', 'engagement_like', 'engagement_skipped'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle() as { data: { created_at: string } | null }
+
+  if (!data) return true
+  const elapsed = Date.now() - new Date(data.created_at).getTime()
+  const jitter = 90 * 60 * 1000 * (0.8 + Math.random() * 0.4)
+  return elapsed >= jitter
 }
 
 // ─── Interaction Pair Selection ──────────────────────

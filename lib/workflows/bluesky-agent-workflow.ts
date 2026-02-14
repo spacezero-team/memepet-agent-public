@@ -22,10 +22,15 @@ import {
   type MemePetPersonalityData
 } from './modules/bluesky-post-generator'
 import type { CraftingWorkflow } from './workflow-interface'
+import { loadBotMemory, saveBotMemory, appendPostToMemory, updateRelationship } from '@/lib/agent/memory/bot-memory-service'
+import type { RecentPostDigest, RelationshipEntry } from '@/lib/agent/types/bot-memory'
+import { evaluateEngagementCandidates, type EngagementCandidateInput } from './modules/bluesky-post-generator'
+import { preFilterCandidates } from './modules/engagement-filter'
+import { BLUESKY_CONFIG as CONFIG } from '@/lib/config/bluesky.config'
 
 // ─── Request Types ──────────────────────────────────
 
-export type BlueskyAgentMode = 'proactive' | 'reactive' | 'interaction'
+export type BlueskyAgentMode = 'proactive' | 'reactive' | 'interaction' | 'engagement'
 
 export interface BlueskyAgentWorkflowRequest {
   mode: BlueskyAgentMode
@@ -84,52 +89,56 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       case 'interaction':
         await this.executeInterPetInteraction(request)
         break
+      case 'engagement':
+        await this.executeProactiveEngagement(request)
+        break
     }
   }
 
   // ─── Proactive Posting ──────────────────────────────
 
-  /**
-   * Generate and publish an autonomous post
-   */
   private async executeProactivePosting(request: BlueskyAgentWorkflowRequest): Promise<void> {
     const { petId } = request
 
-    // Step 1: Load pet data
     const pet = await this.context.run('load-pet-data', async () => {
       return this.loadPetData(petId)
     })
 
-    // Step 2: Get recent posts for context (avoid repetition)
-    const recentPosts = await this.context.run('get-recent-posts', async () => {
-      try {
-        const botClient = await this.createAuthenticatedClient(pet)
-        const feed = await botClient.getOwnRecentPosts(5)
-        return feed.map(f => {
-          const record = f.post.record as { text?: string }
-          return record.text ?? ''
-        }).filter(Boolean)
-      } catch {
-        return []
-      }
+    const memory = await this.context.run('load-memory', async () => {
+      return loadBotMemory(petId)
     })
 
-    // Step 3: Generate post content
     const generatedPost = await this.context.run('generate-post', async () => {
       return generateAutonomousPost(
         pet.meme_personality,
-        recentPosts,
+        memory,
         pet.pet_name
       )
     })
 
-    // Step 4: Publish to Bluesky
     const postResult = await this.context.run('publish-post', async () => {
       const botClient = await this.createAuthenticatedClient(pet)
       return botClient.post(generatedPost.text)
     })
 
-    // Step 5: Log activity
+    await this.context.run('update-memory', async () => {
+      const digest: RecentPostDigest = {
+        postedAt: new Date().toISOString(),
+        gist: generatedPost.postDigest,
+        mood: generatedPost.mood,
+        topic: generatedPost.topicTag,
+        intentType: generatedPost.intentType,
+      }
+
+      let updatedMemory = appendPostToMemory(memory, digest)
+
+      if (generatedPost.narrativeUpdate) {
+        updatedMemory = { ...updatedMemory, narrativeArc: generatedPost.narrativeUpdate }
+      }
+
+      await saveBotMemory(petId, updatedMemory)
+    })
+
     await this.context.run('log-activity', async () => {
       await this.logActivity({
         petId,
@@ -139,7 +148,8 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         content: generatedPost.text,
         metadata: {
           mood: generatedPost.mood,
-          intentType: generatedPost.intentType
+          intentType: generatedPost.intentType,
+          topicTag: generatedPost.topicTag,
         }
       })
     })
@@ -349,6 +359,180 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         }
       })
     })
+  }
+
+  // ─── Proactive Engagement ──────────────────────────
+
+  private async executeProactiveEngagement(request: BlueskyAgentWorkflowRequest): Promise<void> {
+    const { petId } = request
+
+    const pet = await this.context.run('load-pet-engagement', async () => {
+      return this.loadPetData(petId)
+    })
+
+    const candidates = await this.context.run('discover-candidates', async () => {
+      const botClient = await this.createAuthenticatedClient(pet)
+      const allCandidates: EngagementCandidateInput[] = []
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
+
+      try {
+        const { feed } = await botClient.getTimeline(30)
+        const timelineCandidates = feed
+          .filter(f => {
+            const record = f.post.record as { createdAt?: string }
+            return !record.createdAt || record.createdAt >= sixHoursAgo
+          })
+          .map(f => ({
+            postUri: f.post.uri,
+            postCid: f.post.cid,
+            authorHandle: f.post.author.handle,
+            authorDid: f.post.author.did,
+            text: (f.post.record as { text?: string }).text ?? '',
+          }))
+        allCandidates.push(...timelineCandidates)
+      } catch {
+        // Timeline fetch failed
+      }
+
+      const topics = pet.meme_personality.postingConfig.topicAffinity
+      if (topics.length > 0) {
+        const searchTopics = [...topics].sort(() => Math.random() - 0.5).slice(0, 2)
+        for (const topic of searchTopics) {
+          try {
+            const posts = await botClient.searchPosts({ query: topic, sort: 'top', limit: 10, since: sixHoursAgo })
+            allCandidates.push(...posts.map(p => ({
+              postUri: p.uri,
+              postCid: p.cid,
+              authorHandle: p.author.handle,
+              authorDid: p.author.did,
+              text: (p.record as { text?: string }).text ?? '',
+            })))
+          } catch {
+            // Search failed
+          }
+        }
+      }
+
+      // Deduplicate
+      const seen = new Set<string>()
+      const deduped = allCandidates.filter(c => {
+        if (seen.has(c.postUri)) return false
+        seen.add(c.postUri)
+        return true
+      })
+
+      // Load other pet DIDs
+      const supabase = getServiceSupabase()
+      const { data: petDids } = await (supabase as any)
+        .from('bluesky_bot_config')
+        .select('did')
+        .eq('is_active', true) as { data: Array<{ did: string }> | null }
+
+      const otherPetDids = new Set(petDids?.map(p => p.did).filter(Boolean) ?? [])
+
+      const filtered = preFilterCandidates(deduped, botClient.did, otherPetDids)
+      return filtered.filter(f => !f.filtered).map(f => f.candidate).slice(0, 15)
+    })
+
+    if (candidates.length === 0) {
+      await this.context.run('log-no-candidates', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'engagement_skipped',
+          content: 'No suitable engagement candidates found',
+          metadata: { reason: 'no_candidates' },
+        })
+      })
+      return
+    }
+
+    const engagedAuthors = await this.context.run('get-engaged-authors', async () => {
+      const supabase = getServiceSupabase()
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+      const { data } = await (supabase as any)
+        .from('bluesky_post_log')
+        .select('metadata')
+        .eq('pet_id', petId)
+        .in('activity_type', ['engagement_comment', 'engagement_like'])
+        .gte('created_at', since) as { data: Array<{ metadata: Record<string, unknown> }> | null }
+
+      return new Set<string>(
+        data?.map(d => d.metadata?.engagedAuthorHandle as string).filter(Boolean) ?? []
+      )
+    })
+
+    const maxEngagements = this.computeMaxEngagements(pet.meme_personality)
+
+    const decisions = await this.context.run('evaluate-candidates', async () => {
+      return evaluateEngagementCandidates(
+        pet.meme_personality,
+        pet.pet_name,
+        candidates,
+        engagedAuthors,
+        maxEngagements
+      )
+    })
+
+    const actionable = decisions.engagements.filter(
+      d => d.action !== 'skip' && d.postIndex >= 0 && d.postIndex < candidates.length
+    )
+
+    for (let i = 0; i < actionable.length; i++) {
+      const decision = actionable[i]
+      const candidate = candidates[decision.postIndex]
+
+      await this.context.run(`engage-${i}`, async () => {
+        const client = await this.createAuthenticatedClient(pet)
+
+        if (decision.action === 'like' || decision.action === 'like_and_comment') {
+          await client.like(candidate.postUri, candidate.postCid)
+          await this.logActivity({
+            petId,
+            activityType: 'engagement_like',
+            content: `Liked post by @${candidate.authorHandle}`,
+            metadata: {
+              engagedPostUri: candidate.postUri,
+              engagedAuthorHandle: candidate.authorHandle,
+              engagedAuthorDid: candidate.authorDid,
+              relevanceScore: decision.relevanceScore,
+              tone: decision.tone,
+              sessionMood: decisions.sessionMood,
+            },
+          })
+        }
+
+        if ((decision.action === 'comment' || decision.action === 'like_and_comment') && decision.comment) {
+          const replyRef = await client.buildReplyRef(candidate.postUri, candidate.postCid)
+          const result = await client.reply(decision.comment, replyRef)
+          await this.logActivity({
+            petId,
+            activityType: 'engagement_comment',
+            postUri: result.uri,
+            postCid: result.cid,
+            content: decision.comment,
+            metadata: {
+              engagedPostUri: candidate.postUri,
+              engagedAuthorHandle: candidate.authorHandle,
+              engagedAuthorDid: candidate.authorDid,
+              relevanceScore: decision.relevanceScore,
+              tone: decision.tone,
+              sessionMood: decisions.sessionMood,
+            },
+          })
+        }
+      })
+    }
+  }
+
+  private computeMaxEngagements(personality: MemePetPersonalityData): number {
+    const score =
+      (personality.traits.expressiveness * 0.3) +
+      (personality.traits.playfulness * 0.25) +
+      ((personality.socialStyle.approachability + 1) / 2 * 0.25) +
+      ((1 - personality.traits.independence) * 0.2)
+
+    return Math.round(2 + score * 3)
   }
 
   // ─── Failure Handler ──────────────────────────────
