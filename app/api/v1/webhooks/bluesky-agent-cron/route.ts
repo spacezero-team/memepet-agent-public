@@ -265,16 +265,20 @@ async function loadActiveBots(): Promise<ActiveBot[]> {
 
   if (error || !data) return []
 
-  return data.map(row => ({
-    petId: row.pet_id,
-    handle: row.handle,
-    did: row.did,
-    appPassword: row.app_password,
-    frequency: (row.posting_frequency as 'high' | 'medium' | 'low') ?? 'medium',
-    chronotype: (row.chronotype as Chronotype) ?? 'normal',
-    scheduleState: (row.schedule_state as unknown as PetScheduleState) ?? emptyScheduleState(),
-    utcOffsetHours: row.utc_offset_hours ?? -5,
-  }))
+  const excluded = new Set<string>(BLUESKY_CONFIG.EXCLUDED_HANDLES)
+
+  return data
+    .filter(row => !excluded.has(row.handle))
+    .map(row => ({
+      petId: row.pet_id,
+      handle: row.handle,
+      did: row.did,
+      appPassword: row.app_password,
+      frequency: (row.posting_frequency as 'high' | 'medium' | 'low') ?? 'medium',
+      chronotype: (row.chronotype as Chronotype) ?? 'normal',
+      scheduleState: (row.schedule_state as unknown as PetScheduleState) ?? emptyScheduleState(),
+      utcOffsetHours: row.utc_offset_hours ?? -5,
+    }))
 }
 
 // ─── Notification Polling ──────────────────────────

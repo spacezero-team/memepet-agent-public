@@ -52,7 +52,12 @@ export const BLUESKY_CONFIG = {
     ENGAGEMENT_ENABLED: process.env.ENABLE_BLUESKY_ENGAGEMENT === 'true',
     IMAGE_GENERATION_ENABLED: process.env.ENABLE_IMAGE_GENERATION === 'true',
     LOG_API: process.env.LOG_BLUESKY_API === 'true',
-  }
+  },
+
+  /** Handles excluded from agent automation (e.g. feed publisher accounts) */
+  EXCLUDED_HANDLES: [
+    'memepet.0.space',
+  ],
 } as const
 
 /**
