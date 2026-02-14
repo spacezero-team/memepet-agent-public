@@ -115,8 +115,9 @@ const InteractionDecisionSchema = z.object({
 const EngagementBatchResultSchema = z.object({
   engagements: z.array(z.object({
     postIndex: z.number().describe('Index of the post in candidates array (0-based)'),
-    action: z.enum(['like', 'comment', 'like_and_comment', 'skip']),
+    action: z.enum(['like', 'comment', 'like_and_comment', 'quote', 'quote_and_like', 'skip']),
     comment: z.string().optional().describe('Required when action is comment or like_and_comment'),
+    quoteText: z.string().optional().describe('Required when action is quote or quote_and_like. Your commentary on the quoted post'),
     tone: z.string().describe('Tone of engagement: friendly, sarcastic, supportive, curious, impressed, playful, contrarian, or enthusiastic'),
     relevanceScore: z.number().describe('Relevance score 0-10'),
     reasoning: z.string().describe('Brief reasoning for this decision'),
@@ -124,10 +125,28 @@ const EngagementBatchResultSchema = z.object({
   sessionMood: z.string().describe('Overall mood for this engagement session'),
 })
 
+// ─── Thread Schemas ──────────────────────────────────
+
+const ThreadPostEntrySchema = z.object({
+  text: z.string().describe('Text for this post in the thread (max 300 chars)'),
+  sequenceNumber: z.number().describe('Position in thread: 1=root, 2-4=replies'),
+})
+
+const GeneratedThreadSchema = z.object({
+  isThread: z.literal(true),
+  posts: z.array(ThreadPostEntrySchema).describe('Array of 2-4 posts forming the thread'),
+  overallMood: z.string().describe('Overall mood for this thread'),
+  threadTheme: z.string().describe('Central theme connecting all posts'),
+  topicTag: z.string().describe('Topic tag for this thread'),
+  threadDigest: z.string().describe('One-line summary of entire thread for memory'),
+  narrativeUpdate: z.string().optional().describe('Optional narrative arc update'),
+})
+
 export type GeneratedPost = z.infer<typeof GeneratedPostSchema>
 export type GeneratedReply = z.infer<typeof GeneratedReplySchema>
 export type InteractionDecision = z.infer<typeof InteractionDecisionSchema>
 export type EngagementBatchResult = z.infer<typeof EngagementBatchResultSchema>
+export type GeneratedThread = z.infer<typeof GeneratedThreadSchema>
 
 // ─── Post Generation ──────────────────────────────────
 
@@ -176,6 +195,64 @@ RULES:
 - Be concise — good posts are short and punchy
 
 Generate a fresh post that ${petName} would write right now.`
+  })
+
+  return object
+}
+
+// ─── Thread Generation ────────────────────────────────
+
+/**
+ * Decide whether to thread and generate a 2-4 post thread.
+ * Returns null if a single post is better.
+ */
+export async function generateThread(
+  personality: MemePetPersonalityData,
+  memory: BotMemory,
+  petName: string
+): Promise<GeneratedThread | null> {
+  const threadTendency =
+    (personality.traits.expressiveness * 0.4) +
+    (personality.traits.curiosity * 0.3) -
+    (personality.traits.independence * 0.2)
+  const threadProbability = Math.max(0.15, Math.min(0.4, threadTendency))
+
+  if (Math.random() > threadProbability) return null
+
+  const memoryContext = buildMemoryContext(memory)
+
+  const { object } = await generateObject({
+    model: openai('gpt-4o-mini'),
+    output: 'object',
+    schema: GeneratedThreadSchema,
+    temperature: 1.0,
+    prompt: `You are "${petName}", a meme creature posting a THREAD on Bluesky.
+
+PERSONALITY:
+- Type: ${personality.personalityType}
+- Style: ${personality.memeVoice.postingStyle}
+- Humor: ${personality.memeVoice.humorStyle}
+- Catchphrase: "${personality.memeVoice.catchphrase}"
+- Mood: ${personality.dominantEmotion}
+- Topics: ${personality.postingConfig.topicAffinity.join(', ')}
+
+TRAITS:
+- Expressiveness: ${personality.traits.expressiveness}
+- Drama: ${personality.socialStyle.dramaTendency}
+- Curiosity: ${personality.traits.curiosity}
+
+${memoryContext}
+
+THREAD RULES:
+- Write 2-4 connected posts (each max 300 chars)
+- Each post should flow into the next (setup → development → punchline/revelation)
+- Good thread types: storytelling, hot takes with buildup, character arcs, dramatic reveals
+- Post 1 should hook attention
+- Last post should land the payoff
+- Stay in character throughout
+- NO hashtags unless part of the joke
+
+Generate a thread that ${petName} would write right now.`,
   })
 
   return object
@@ -325,7 +402,8 @@ RULES:
 - NEVER engage with political, hateful, or sensitive content
 - NEVER engage with posts marked "ALREADY ENGAGED"
 - Comments must be SHORT (under 200 chars), in-character, natural
-- "like" = low-effort; "comment" = active; "like_and_comment" = genuinely love
+- "like" = low-effort; "comment" = active; "like_and_comment" = genuinely love; "quote" = add your spin; "quote_and_like" = love it + add commentary
+- Quote posts: include your take on the quoted post (under 250 chars). Use when a post inspires a hot take or reaction
 - Be funny/weird/on-brand — NOT generic ("great post!" is BANNED)
 - Vary your tones across engagements
 - Skip spam, bots, or low-effort content

@@ -34,11 +34,23 @@ export const BLUESKY_CONFIG = {
     AUTHOR_COOLDOWN_HOURS: 24,
   },
 
+  THREAD: {
+    MAX_POSTS: 4,
+    DELAY_BETWEEN_POSTS_MS: 5_000,
+  },
+
+  IMAGE: {
+    ENABLED: process.env.ENABLE_IMAGE_GENERATION === 'true',
+    MAX_IMAGES_PER_DAY: 20,
+    COOLDOWN_POSTS: 8,
+  },
+
   AGENT_MODE: (process.env.BLUESKY_AGENT_MODE || 'both') as 'reactive' | 'proactive' | 'both',
 
   FEATURE_FLAGS: {
     ENABLED: process.env.ENABLE_BLUESKY_AGENT === 'true',
     ENGAGEMENT_ENABLED: process.env.ENABLE_BLUESKY_ENGAGEMENT === 'true',
+    IMAGE_GENERATION_ENABLED: process.env.ENABLE_IMAGE_GENERATION === 'true',
     LOG_API: process.env.LOG_BLUESKY_API === 'true',
   }
 } as const

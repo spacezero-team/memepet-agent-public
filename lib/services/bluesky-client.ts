@@ -238,6 +238,43 @@ export class BlueskyBotClient {
   }
 
   /**
+   * Quote post (repost with commentary).
+   * Uses app.bsky.embed.record to embed the quoted post.
+   */
+  async quotePost(
+    text: string,
+    quotedUri: string,
+    quotedCid: string
+  ): Promise<BlueskyPostResult> {
+    this.ensureAuthenticated()
+    this.ensureRateLimit()
+    this.ensureCooldown()
+
+    const rt = new RichText({ text })
+    await rt.detectFacets(this.agent)
+
+    const record: Partial<AppBskyFeedPost.Record> = {
+      text: rt.text,
+      facets: rt.facets,
+      embed: {
+        $type: 'app.bsky.embed.record',
+        record: {
+          uri: quotedUri,
+          cid: quotedCid,
+        },
+      } as any,
+      createdAt: new Date().toISOString(),
+    }
+
+    const result = await this.agent.post(record as AppBskyFeedPost.Record)
+
+    this.rateLimiter.recordPost()
+    this.lastInteractionAt = Date.now()
+
+    return { uri: result.uri, cid: result.cid }
+  }
+
+  /**
    * Like a post
    */
   async like(uri: string, cid: string): Promise<void> {

@@ -17,16 +17,25 @@ import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import { BlueskyBotClient, type BlueskyBotConfig, type BlueskyReplyRef } from '@/lib/services/bluesky-client'
 import {
   generateAutonomousPost,
+  generateThread,
   generateReply,
   decideInteraction,
-  type MemePetPersonalityData
+  type MemePetPersonalityData,
+  type GeneratedThread,
 } from './modules/bluesky-post-generator'
 import type { CraftingWorkflow } from './workflow-interface'
-import { loadBotMemory, saveBotMemory, appendPostToMemory, updateRelationship } from '@/lib/agent/memory/bot-memory-service'
-import type { RecentPostDigest, RelationshipEntry } from '@/lib/agent/types/bot-memory'
+import { loadBotMemory, saveBotMemory, appendPostToMemory } from '@/lib/agent/memory/bot-memory-service'
+import type { RecentPostDigest } from '@/lib/agent/types/bot-memory'
 import { evaluateEngagementCandidates, type EngagementCandidateInput } from './modules/bluesky-post-generator'
 import { preFilterCandidates } from './modules/engagement-filter'
-import { BLUESKY_CONFIG as CONFIG } from '@/lib/config/bluesky.config'
+import {
+  loadRelationship,
+  updateRelationshipAfterInteraction,
+  computeSentimentDelta,
+  formatRelationshipForPrompt,
+} from '@/lib/agent/memory/relationship-memory-service'
+import { decideImageGeneration } from './modules/bluesky-image-prompt-generator'
+import { generateMemeImage } from '@/lib/services/image-generator'
 
 // ─── Request Types ──────────────────────────────────
 
@@ -108,6 +117,17 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return loadBotMemory(petId)
     })
 
+    // Try thread generation first (personality-based probability)
+    const thread = await this.context.run('try-thread', async () => {
+      return generateThread(pet.meme_personality, memory, pet.pet_name)
+    }) as GeneratedThread | null
+
+    if (thread) {
+      await this.executeThreadPosting(petId, pet, thread, memory)
+      return
+    }
+
+    // Single post path
     const generatedPost = await this.context.run('generate-post', async () => {
       return generateAutonomousPost(
         pet.meme_personality,
@@ -116,9 +136,34 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       )
     })
 
+    // Image generation (personality-based probability)
+    const imageResult = BLUESKY_CONFIG.FEATURE_FLAGS.IMAGE_GENERATION_ENABLED
+      ? await this.context.run('try-image', async () => {
+          const postsSinceLastImage = memory.recentPosts.filter(
+            (p: RecentPostDigest) => !('hasImage' in p)
+          ).length
+          const decision = await decideImageGeneration({
+            personality: pet.meme_personality,
+            postText: generatedPost.text,
+            petName: pet.pet_name,
+            postsSinceLastImage,
+          })
+          if (!decision.shouldGenerateImage || !decision.imagePrompt) return null
+          return generateMemeImage({
+            imagePrompt: decision.imagePrompt,
+            imageAlt: decision.imageAlt ?? generatedPost.text.slice(0, 100),
+            petName: pet.pet_name,
+          })
+        })
+      : null
+
     const postResult = await this.context.run('publish-post', async () => {
       const botClient = await this.createAuthenticatedClient(pet)
-      return botClient.post(generatedPost.text)
+      return botClient.post(
+        generatedPost.text,
+        imageResult?.imageBlob,
+        imageResult?.imageAlt
+      )
     })
 
     await this.context.run('update-memory', async () => {
@@ -150,7 +195,77 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
           mood: generatedPost.mood,
           intentType: generatedPost.intentType,
           topicTag: generatedPost.topicTag,
+          hasImage: !!imageResult,
+          imageGenerationTimeMs: imageResult?.generationTimeMs,
         }
+      })
+    })
+  }
+
+  // ─── Thread Posting ──────────────────────────────
+
+  private async executeThreadPosting(
+    petId: string,
+    pet: PetData,
+    thread: GeneratedThread,
+    memory: import('@/lib/agent/types/bot-memory').BotMemory
+  ): Promise<void> {
+    const posts = thread.posts.slice(0, BLUESKY_CONFIG.THREAD.MAX_POSTS)
+
+    // Post root
+    const rootResult = await this.context.run('thread-root', async () => {
+      const botClient = await this.createAuthenticatedClient(pet)
+      return botClient.post(posts[0].text)
+    })
+
+    // Collect all results: [root, reply1, reply2, ...]
+    const allResults: Array<{ uri: string; cid: string; text: string }> = [
+      { ...rootResult, text: posts[0].text },
+    ]
+
+    // Post subsequent thread replies
+    for (let i = 1; i < posts.length; i++) {
+      const prevResult = allResults[i - 1]
+      const replyResult = await this.context.run(`thread-reply-${i}`, async () => {
+        const botClient = await this.createAuthenticatedClient(pet)
+        const replyRef: BlueskyReplyRef = {
+          root: { uri: rootResult.uri, cid: rootResult.cid },
+          parent: { uri: prevResult.uri, cid: prevResult.cid },
+        }
+        return botClient.reply(posts[i].text, replyRef)
+      })
+      allResults.push({ ...replyResult, text: posts[i].text })
+    }
+
+    await this.context.run('thread-memory', async () => {
+      const digest: RecentPostDigest = {
+        postedAt: new Date().toISOString(),
+        gist: thread.threadDigest.slice(0, 80),
+        mood: thread.overallMood,
+        topic: thread.topicTag,
+        intentType: 'thread',
+      }
+      let updatedMemory = appendPostToMemory(memory, digest)
+      if (thread.narrativeUpdate) {
+        updatedMemory = { ...updatedMemory, narrativeArc: thread.narrativeUpdate }
+      }
+      await saveBotMemory(petId, updatedMemory)
+    })
+
+    await this.context.run('thread-log', async () => {
+      await this.logActivity({
+        petId,
+        activityType: 'proactive_thread',
+        postUri: rootResult.uri,
+        postCid: rootResult.cid,
+        content: allResults.map(r => r.text).join('\n---\n'),
+        metadata: {
+          threadTheme: thread.threadTheme,
+          overallMood: thread.overallMood,
+          topicTag: thread.topicTag,
+          threadLength: posts.length,
+          postUris: allResults.map(r => r.uri),
+        },
       })
     })
   }
@@ -239,7 +354,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return botClient.reply(generatedReply.text, replyRef)
     })
 
-    // Step 5: Log activity
+    // Step 5: Log activity + update relationship if replying to another pet
     await this.context.run('log-reply-activity', async () => {
       await this.logActivity({
         petId,
@@ -254,6 +369,14 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
           threadUri: notification.rootUri ?? notification.uri
         }
       })
+
+      // Update relationship if replying to another pet
+      const repliedToPetId = await this.getPetIdByDid(notification.authorDid)
+      if (repliedToPetId) {
+        await updateRelationshipAfterInteraction(petId, repliedToPetId, {
+          interactionType: `reply_${generatedReply.tone}`,
+        })
+      }
     })
   }
 
@@ -294,9 +417,11 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       }
     )
 
-    // Step 2: Get relationship history
+    // Step 2: Get relationship history (structured + text)
     const history = await this.context.run('get-history', async () => {
-      return this.getRelationshipHistory(petId, targetPetId)
+      const relationship = await loadRelationship(petId, targetPetId)
+      const recentMessages = await this.getRecentInteractionMessages(petId, targetPetId)
+      return formatRelationshipForPrompt(relationship, recentMessages)
     })
 
     // Step 3: AI decides whether and how to interact
@@ -343,7 +468,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return botClient.post(message)
     })
 
-    // Step 5: Log interaction
+    // Step 5: Log interaction + update relationship
     await this.context.run('log-interaction', async () => {
       await this.logActivity({
         petId,
@@ -357,6 +482,10 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
           interactionType: decision.interactionType,
           reasoning: decision.reasoning
         }
+      })
+
+      await updateRelationshipAfterInteraction(petId, targetPetId, {
+        interactionType: decision.interactionType,
       })
     })
   }
@@ -487,7 +616,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       await this.context.run(`engage-${i}`, async () => {
         const client = await this.createAuthenticatedClient(pet)
 
-        if (decision.action === 'like' || decision.action === 'like_and_comment') {
+        if (decision.action === 'like' || decision.action === 'like_and_comment' || decision.action === 'quote_and_like') {
           await client.like(candidate.postUri, candidate.postCid)
           await this.logActivity({
             petId,
@@ -517,6 +646,26 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
               engagedPostUri: candidate.postUri,
               engagedAuthorHandle: candidate.authorHandle,
               engagedAuthorDid: candidate.authorDid,
+              relevanceScore: decision.relevanceScore,
+              tone: decision.tone,
+              sessionMood: decisions.sessionMood,
+            },
+          })
+        }
+
+        if ((decision.action === 'quote' || decision.action === 'quote_and_like') && decision.quoteText) {
+          const result = await client.quotePost(decision.quoteText, candidate.postUri, candidate.postCid)
+          await this.logActivity({
+            petId,
+            activityType: 'engagement_quote',
+            postUri: result.uri,
+            postCid: result.cid,
+            content: decision.quoteText,
+            metadata: {
+              engagedPostUri: candidate.postUri,
+              engagedAuthorHandle: candidate.authorHandle,
+              engagedAuthorDid: candidate.authorDid,
+              quotedPostText: candidate.text.slice(0, 200),
               relevanceScore: decision.relevanceScore,
               tone: decision.tone,
               sessionMood: decisions.sessionMood,
@@ -731,28 +880,35 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     return data?.map(d => d.content) ?? []
   }
 
-  private async getRelationshipHistory(
+  private async getRecentInteractionMessages(
     petId: string,
     targetPetId: string
-  ): Promise<string> {
+  ): Promise<string[]> {
     const supabase = getServiceSupabase()
     const { data } = await (supabase as any)
       .from('bluesky_post_log')
-      .select('activity_type, content, metadata, created_at')
+      .select('activity_type, content, metadata')
       .eq('pet_id', petId)
       .eq('metadata->>targetPetId', targetPetId)
       .order('created_at', { ascending: false })
-      .limit(5) as { data: Array<{ activity_type: string; content: string; metadata: Record<string, unknown> | null; created_at: string }> | null }
+      .limit(3) as { data: Array<{ activity_type: string; content: string; metadata: Record<string, unknown> | null }> | null }
 
-    if (!data || data.length === 0) {
-      return 'No previous interactions'
-    }
+    if (!data) return []
 
     return data.map(d => {
-      const meta = d.metadata
-      const type = meta?.interactionType ?? d.activity_type
+      const type = (d.metadata?.interactionType ?? d.activity_type) as string
       const truncated = d.content.length > 80 ? d.content.slice(0, 80) + '...' : d.content
       return `[${type}] ${truncated}`
-    }).join('\n')
+    })
+  }
+
+  private async getPetIdByDid(did: string): Promise<string | null> {
+    const supabase = getServiceSupabase()
+    const { data } = await (supabase as any)
+      .from('bluesky_bot_config')
+      .select('pet_id')
+      .eq('did', did)
+      .maybeSingle() as { data: { pet_id: string } | null }
+    return data?.pet_id ?? null
   }
 }
