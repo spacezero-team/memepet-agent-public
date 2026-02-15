@@ -12,6 +12,9 @@
  */
 
 import { WorkflowContext } from '@upstash/workflow'
+import { z } from 'zod'
+import { generateObject } from 'ai'
+import { google } from '@ai-sdk/google'
 import { getServiceSupabase } from '@/lib/api/service-supabase'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import { BlueskyBotClient, type BlueskyBotConfig, type BlueskyReplyRef } from '@/lib/services/bluesky-client'
@@ -35,6 +38,19 @@ import {
 } from '@/lib/agent/memory/relationship-memory-service'
 import { decideImageGeneration } from './modules/bluesky-image-prompt-generator'
 import { generateMemeImage } from '@/lib/services/image-generator'
+import { triggerWorkflow } from '@/lib/workflows/workflow-client'
+import {
+  getDefaultMood,
+  decayMood,
+  applyEvent,
+  hoursSinceLastUpdate,
+  type MoodState,
+} from '@/lib/agent/mood/emotion-engine'
+import {
+  shouldReflect,
+  generateReflections,
+  applyReflectionsToMemory,
+} from '@/lib/agent/memory/reflection-service'
 
 // ─── Request Types ──────────────────────────────────
 
@@ -116,9 +132,35 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return loadBotMemory(petId)
     })
 
+    // Initialize and update mood state
+    const moodState = await this.context.run('update-mood', async () => {
+      const baseline = getDefaultMood(pet.meme_personality.personalityType)
+      const currentMood = memory.moodState ?? baseline
+      const elapsed = hoursSinceLastUpdate(currentMood)
+      const decayedMood = decayMood(currentMood, baseline, elapsed)
+      // Apply chronotype event based on current hour
+      const hour = new Date().getUTCHours()
+      const chronoEvent = hour >= 5 && hour < 12 ? { type: 'morning' as const }
+        : hour >= 22 || hour < 5 ? { type: 'late_night' as const }
+        : null
+      return chronoEvent ? applyEvent(decayedMood, chronoEvent) : decayedMood
+    }) as MoodState
+
+    // Generate reflections if needed
+    const reflectedMemory = await this.context.run('maybe-reflect', async () => {
+      if (!shouldReflect(memory)) return memory
+      const newInsights = await generateReflections({
+        recentPosts: memory.recentPosts,
+        relationships: memory.relationships ?? [],
+        petName: pet.pet_name,
+        personalityType: pet.meme_personality.personalityType,
+      })
+      return newInsights.length > 0 ? applyReflectionsToMemory(memory, newInsights) : memory
+    })
+
     // Try thread generation first (personality-based probability)
     const thread = await this.context.run('try-thread', async () => {
-      return generateThread(pet.meme_personality, memory, pet.pet_name)
+      return generateThread(pet.meme_personality, reflectedMemory, pet.pet_name)
     }) as GeneratedThread | null
 
     if (thread) {
@@ -130,8 +172,12 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     const generatedPost = await this.context.run('generate-post', async () => {
       return generateAutonomousPost(
         pet.meme_personality,
-        memory,
-        pet.pet_name
+        reflectedMemory,
+        pet.pet_name,
+        {
+          moodState,
+          reflections: reflectedMemory.reflections,
+        }
       )
     })
 
@@ -179,7 +225,11 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         hasImage: !!imageResult,
       }
 
-      let updatedMemory = appendPostToMemory(memory, digest)
+      let updatedMemory = appendPostToMemory(reflectedMemory, digest)
+
+      // Persist mood state with posted_successfully event applied
+      const postMood = applyEvent(moodState, { type: 'posted_successfully' })
+      updatedMemory = { ...updatedMemory, moodState: postMood }
 
       if (generatedPost.narrativeUpdate) {
         updatedMemory = { ...updatedMemory, narrativeArc: generatedPost.narrativeUpdate }
@@ -204,6 +254,80 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         }
       })
     })
+
+    // After posting, maybe add a self-reply thread (30% chance)
+    const selfReply = await this.context.run('maybe-self-reply', async () => {
+      const SELF_REPLY_PROBABILITY = 0.3
+      const shouldSelfReply = Math.random() < SELF_REPLY_PROBABILITY
+      if (!shouldSelfReply) return null
+
+      const { object: followUp } = await generateObject({
+        model: google('gemini-2.0-flash-001'),
+        schema: z.object({
+          text: z.string().max(280),
+          tone: z.string(),
+        }),
+        temperature: 0.9,
+        prompt: `You are "${pet.pet_name}", a meme creature on Bluesky.
+
+You just posted: "${generatedPost.text}"
+
+Now write a SHORT follow-up reply to your own post. This creates a thread.
+Examples of good self-replies:
+- Adding a punchline to your own joke
+- "wait actually now that I think about it..."
+- A contradicting hot take on your own post
+- An emoji reaction to yourself
+- "this might be my best post yet ngl"
+- Doubling down on your take even harder
+- A dramatic "edit:" or "update:" as if something changed
+
+Keep it under 200 characters. Be casual and funny. Stay in character.
+Personality type: ${pet.meme_personality.personalityType}
+Humor style: ${pet.meme_personality.memeVoice.humorStyle}
+Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
+      })
+
+      // Post as reply to the original post
+      const client = await this.createAuthenticatedClient(pet)
+      const replyRef: BlueskyReplyRef = {
+        root: { uri: postResult.uri, cid: postResult.cid },
+        parent: { uri: postResult.uri, cid: postResult.cid },
+      }
+      const replyResult = await client.reply(followUp.text, replyRef)
+
+      return { text: followUp.text, tone: followUp.tone, uri: replyResult.uri, cid: replyResult.cid }
+    })
+
+    if (selfReply) {
+      await this.context.run('log-self-reply', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'proactive_self_reply',
+          postUri: selfReply.uri,
+          postCid: selfReply.cid,
+          content: selfReply.text,
+          metadata: {
+            tone: selfReply.tone,
+            parentPostUri: postResult.uri,
+            parentPostText: generatedPost.text.slice(0, 100),
+          },
+        })
+      })
+
+      await this.context.run('update-memory-self-reply', async () => {
+        const currentMemory = await loadBotMemory(petId)
+        const digest: RecentPostDigest = {
+          postedAt: new Date().toISOString(),
+          gist: `self-reply: ${selfReply.text.slice(0, 60)}`,
+          mood: selfReply.tone,
+          topic: generatedPost.topicTag,
+          intentType: 'callback',
+        }
+        const updatedMemory = appendPostToMemory(currentMemory, digest)
+        await saveBotMemory(petId, updatedMemory)
+      })
+    }
   }
 
   // ─── Thread Posting ──────────────────────────────
@@ -492,6 +616,32 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       await updateRelationshipAfterInteraction(petId, targetPetId, {
         interactionType: decision.interactionType,
       })
+    })
+
+    // Step 6: 20% chance the target pet gets notified to respond immediately
+    await this.context.run('maybe-trigger-response', async () => {
+      const IMMEDIATE_RESPONSE_PROBABILITY = 0.2
+      const shouldTriggerResponse = Math.random() < IMMEDIATE_RESPONSE_PROBABILITY
+      if (!shouldTriggerResponse) return
+
+      // Schedule a reactive workflow for the target pet to pick up this mention
+      await triggerWorkflow(
+        '/api/v1/workflows/bluesky-agent',
+        {
+          mode: 'reactive' as const,
+          petId: targetPetId,
+          notification: {
+            uri: postResult.uri,
+            cid: postResult.cid,
+            authorHandle: myPet.bluesky_handle,
+            authorDid: myPet.bluesky_did ?? '',
+            text: decision.openingMessage,
+            reason: 'mention' as const,
+          },
+        },
+        'BLUESKY_AGENT',
+        { retries: 1, delay: 10 }
+      )
     })
   }
 

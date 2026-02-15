@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod'
+import { MoodStateSchema } from '@/lib/agent/mood/emotion-engine'
 
 const RecentPostDigestSchema = z.object({
   postedAt: z.string(),
@@ -36,6 +37,24 @@ const RunningThemeSchema = z.object({
   status: z.enum(['active', 'cooling-off', 'retired']),
 })
 
+export const ReflectionInsightSchema = z.object({
+  insight: z.string()
+    .max(300)
+    .describe('A high-level insight the pet formed from reflecting on recent activity'),
+  category: z.enum(['self', 'relationship', 'world', 'goal'])
+    .describe('What this insight is about'),
+  confidence: z.number()
+    .min(0)
+    .max(1)
+    .describe('Confidence level from 0.0 to 1.0'),
+  createdAt: z.string()
+    .describe('ISO timestamp of when this insight was formed'),
+  basedOnPosts: z.number()
+    .int()
+    .min(0)
+    .describe('How many recent posts contributed to this insight'),
+})
+
 export const BotMemorySchema = z.object({
   version: z.literal(1),
   updatedAt: z.string(),
@@ -46,9 +65,13 @@ export const BotMemorySchema = z.object({
   narrativeArc: z.string().max(300),
   currentMood: z.string().max(50),
   avoidList: z.array(z.string().max(80)).max(10),
+  reflections: z.array(ReflectionInsightSchema).max(10).optional(),
+  lastReflectionAt: z.string().optional(),
+  moodState: MoodStateSchema.optional(),
 })
 
 export type BotMemory = z.infer<typeof BotMemorySchema>
 export type RecentPostDigest = z.infer<typeof RecentPostDigestSchema>
 export type RelationshipEntry = z.infer<typeof RelationshipEntrySchema>
 export type RunningTheme = z.infer<typeof RunningThemeSchema>
+export type ReflectionInsight = z.infer<typeof ReflectionInsightSchema>

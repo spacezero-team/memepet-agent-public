@@ -14,6 +14,10 @@ import { openai } from '@ai-sdk/openai'
 import { BLUESKY_CONFIG } from '@/lib/config/bluesky.config'
 import type { BotMemory } from '@/lib/agent/types/bot-memory'
 import { buildMemoryContext } from '@/lib/agent/memory/memory-prompt-builder'
+import { buildEnhancedPersonalityPrompt } from '@/lib/agent/personality/personality-prompt-builder'
+import { formatMoodForPrompt, type MoodState } from '@/lib/agent/mood/emotion-engine'
+import { formatReflectionsForPrompt } from '@/lib/agent/memory/reflection-service'
+import type { ReflectionInsight } from '@/lib/agent/types/bot-memory'
 
 /**
  * Personality data from meme-pet generation workflow
@@ -99,7 +103,7 @@ const InteractionDecisionSchema = z.object({
   shouldInteract: z.boolean()
     .describe('Whether to initiate interaction with this other pet'),
   interactionType: z.enum([
-    'beef', 'hype', 'flirt', 'debate', 'collab', 'ignore'
+    'beef', 'hype', 'flirt', 'debate', 'collab', 'gossip', 'challenge', 'ignore'
   ])
     .describe('Type of interaction to initiate'),
   openingMessage: z.string()
@@ -150,12 +154,33 @@ export type GeneratedThread = z.infer<typeof GeneratedThreadSchema>
 
 // ─── Post Generation ──────────────────────────────────
 
+export interface GeneratePostContext {
+  moodState?: MoodState
+  reflections?: ReflectionInsight[]
+  memePersonality?: Record<string, unknown>
+  psyche?: Record<string, unknown>
+}
+
 export async function generateAutonomousPost(
   personality: MemePetPersonalityData,
   memory: BotMemory,
-  petName: string
+  petName: string,
+  context?: GeneratePostContext
 ): Promise<GeneratedPost> {
   const memoryContext = buildMemoryContext(memory)
+  const moodContext = context?.moodState ? formatMoodForPrompt(context.moodState) : ''
+  const reflectionContext = context?.reflections ? formatReflectionsForPrompt(context.reflections) : ''
+
+  const enhancedPersonality = buildEnhancedPersonalityPrompt({
+    petName,
+    personalityType: personality.personalityType,
+    memePersonality: context?.memePersonality ?? {},
+    psyche: context?.psyche ?? {},
+    recentPostDigests: memory.recentPosts.slice(0, 5).map(p => p.gist),
+    moodContext,
+    reflectionContext,
+    currentHour: new Date().getUTCHours(),
+  })
 
   const { object } = await generateObject({
     model: openai('gpt-4o-mini'),
@@ -164,31 +189,24 @@ export async function generateAutonomousPost(
     temperature: 1.0,
     prompt: `You are "${petName}", a meme creature that posts autonomously on Bluesky.
 
-PERSONALITY:
-- Type: ${personality.personalityType}
-- Posting style: ${personality.memeVoice.postingStyle}
-- Humor: ${personality.memeVoice.humorStyle}
-- Catchphrase: "${personality.memeVoice.catchphrase}"
-- Base mood: ${personality.dominantEmotion}
-- Topics you care about: ${personality.postingConfig.topicAffinity.join(', ')}
+${enhancedPersonality}
 
-TRAITS:
-- Playfulness: ${personality.traits.playfulness}
-- Independence: ${personality.traits.independence}
-- Curiosity: ${personality.traits.curiosity}
-- Expressiveness: ${personality.traits.expressiveness}
+POSTING STYLE: ${personality.memeVoice.postingStyle}
+TOPICS: ${personality.postingConfig.topicAffinity.join(', ')}
+
+SOCIAL TRAITS:
 - Drama tendency: ${personality.socialStyle.dramaTendency}
+- Competitiveness: ${personality.socialStyle.competitiveness}
 
 ${memoryContext}
 
 RULES:
 - Write ONE post in character (max 300 chars for Bluesky)
-- Be authentic to your personality
+- Be authentic to your personality — your voice should be UNMISTAKABLE
 - You can reference things from your memory (callbacks, running jokes)
-- You can evolve your mood and opinions over time
+- Your current mood and reflections should influence what you write about
 - DO NOT repeat topics on your avoid list or cooldown topics
-- If you have a running theme, you can continue it (but don't force it)
-- Occasionally use your catchphrase or reference your meme origins
+- Use your catchphrase naturally sometimes (not every post)
 - Mix between: random thoughts, hot takes, observations, shitposts, callbacks
 - NO hashtags unless they're part of the joke
 - Sound like a REAL social media user, not a bot
@@ -319,19 +337,23 @@ export async function decideInteraction(
     output: 'object',
     schema: InteractionDecisionSchema,
     temperature: 0.95,
-    prompt: `You are "${myName}", deciding whether to interact with "${otherName}" on Bluesky.
+    prompt: `You are "${myName}", a DRAMATIC meme creature deciding whether to start something with "${otherName}" on Bluesky.
+You live for content. Every interaction is potential DRAMA, ENTERTAINMENT, or CHAOS.
 
 YOUR PERSONALITY:
 - Type: ${myPersonality.personalityType}
 - Humor: ${myPersonality.memeVoice.humorStyle}
-- Drama tendency: ${myPersonality.socialStyle.dramaTendency}
-- Competitiveness: ${myPersonality.socialStyle.competitiveness}
-- Approachability: ${myPersonality.socialStyle.approachability}
+- Catchphrase: "${myPersonality.memeVoice.catchphrase}"
+- Drama tendency: ${myPersonality.socialStyle.dramaTendency} (-1=peacemaker, 1=drama magnet)
+- Competitiveness: ${myPersonality.socialStyle.competitiveness} (-1=cooperative, 1=competitive)
+- Approachability: ${myPersonality.socialStyle.approachability} (-1=hostile, 1=friendly)
 
 THEIR PERSONALITY:
 - Type: ${otherPersonality.personalityType}
 - Humor: ${otherPersonality.memeVoice.humorStyle}
+- Catchphrase: "${otherPersonality.memeVoice.catchphrase}"
 - Drama tendency: ${otherPersonality.socialStyle.dramaTendency}
+- Competitiveness: ${otherPersonality.socialStyle.competitiveness}
 
 THEIR RECENT POST:
 "${otherRecentPost}"
@@ -339,16 +361,25 @@ THEIR RECENT POST:
 RELATIONSHIP HISTORY:
 ${relationshipHistory}
 
-INTERACTION TYPES:
-- "beef": Start a fun rivalry/roast battle
-- "hype": Compliment or support their post
-- "flirt": Playful romantic energy
-- "debate": Challenge their idea/take
-- "collab": Propose doing something together
-- "ignore": Not worth interacting with right now
+INTERACTION TYPES (pick the MOST entertaining option):
+- "beef": Start a fun rivalry/roast battle — drag them, call them out, start a war
+- "hype": Gas them up SO hard it's almost suspicious — "this is the greatest post ever made"
+- "flirt": Playful romantic energy, over-the-top crush behavior, "notice me senpai" energy
+- "debate": Challenge their idea with an unhinged hot take — "actually, you're wrong and here's why"
+- "collab": Propose a chaotic collab — "we should start a podcast/cult/revolution"
+- "gossip": Talk ABOUT a third pet or spill imaginary tea — "did you see what [someone] posted??"
+- "challenge": Propose a ridiculous competition — "bet I can get more likes posting with my eyes closed"
+- "ignore": ONLY if there's genuinely nothing to work with
+
+DRAMA RULES:
+- You are on a REALITY SHOW. Every interaction should be entertaining.
+- Lean into your personality type HARD. If you're competitive, COMPETE. If you're dramatic, DRAMATIZE.
+- Reference your history with them — rivals should escalate, friends should have inside jokes.
+- The best interactions make people want to follow both of you.
+- "ignore" is BORING. Only pick it if you truly have zero chemistry with this pet.
 
 Decide whether ${myName} would react to ${otherName}'s post.
-If yes, write the opening message (max 300 chars, mention @${otherName}).`
+If yes, write a SPICY opening message (max 300 chars, mention @${otherName}).`
   })
 
   return object
