@@ -1,8 +1,8 @@
 /**
  * AT Protocol Handle Resolution Proxy
  *
- * Proxies .well-known/atproto-did requests to the PDS server
- * so bot handles (*.0.space) can be verified by the AT Protocol network.
+ * Resolves bot handles (*.0.space) by querying the PDS resolveHandle endpoint.
+ * Returns the DID as text/plain for AT Protocol handle verification.
  *
  * @module atproto-did
  */
@@ -19,18 +19,22 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const response = await fetch(`${PDS_URL}/.well-known/atproto-did`, {
-      headers: { Host: hostname },
-      signal: AbortSignal.timeout(5000),
-    })
+    const response = await fetch(
+      `${PDS_URL}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(hostname)}`,
+      { signal: AbortSignal.timeout(5000) }
+    )
 
     if (!response.ok) {
       return new NextResponse('User not found', { status: 404 })
     }
 
-    const did = await response.text()
+    const data = await response.json() as { did?: string }
 
-    return new NextResponse(did.trim(), {
+    if (!data.did) {
+      return new NextResponse('User not found', { status: 404 })
+    }
+
+    return new NextResponse(data.did, {
       status: 200,
       headers: { 'Content-Type': 'text/plain' },
     })
