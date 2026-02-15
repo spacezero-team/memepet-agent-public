@@ -11,7 +11,7 @@
 import { NextResponse } from 'next/server'
 
 const PUBLISHER_DID = 'did:plc:aq5zgmygkh2uztg44izqmhzy'
-const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? process.env.VERCEL_PROJECT_PRODUCTION_URL ?? 'memepet-agent.0.space'
+const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? 'memepet-agent.0.space'
 const SERVICE_DID = `did:web:${FEED_HOSTNAME}`
 
 export async function GET() {

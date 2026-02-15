@@ -417,7 +417,9 @@ export class BlueskyBotClient {
   }
 
   /**
-   * Search posts by query string
+   * Search posts by query string.
+   * Uses the public Bluesky AppView API for reliable search
+   * (custom PDS instances may not proxy search correctly).
    */
   async searchPosts(params: {
     query: string
@@ -426,13 +428,29 @@ export class BlueskyBotClient {
     since?: string
   }): Promise<AppBskyFeedDefs.PostView[]> {
     this.ensureAuthenticated()
-    const response = await this.agent.app.bsky.feed.searchPosts({
+
+    // Use public AppView for search — custom PDS may not proxy this
+    const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
+    const response = await publicAgent.app.bsky.feed.searchPosts({
       q: params.query,
       sort: params.sort ?? 'top',
       limit: params.limit ?? 20,
       since: params.since,
     })
     return response.data.posts
+  }
+
+  /**
+   * Get posts from the Discover feed (public, no auth needed).
+   * Useful as fallback when bot's home timeline is empty.
+   */
+  async getDiscoverFeed(limit = 30): Promise<AppBskyFeedDefs.FeedViewPost[]> {
+    const publicAgent = new AtpAgent({ service: 'https://public.api.bsky.app' })
+    const response = await publicAgent.app.bsky.feed.getFeed({
+      feed: 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot',
+      limit,
+    })
+    return response.data.feed
   }
 
   /**

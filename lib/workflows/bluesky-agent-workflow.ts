@@ -657,14 +657,16 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
     const discoveryResult = await this.context.run('discover-candidates', async () => {
       const botClient = await this.createAuthenticatedClient(pet)
       const allCandidates: EngagementCandidateInput[] = []
-      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
+      const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString()
+      const debugSources = { timeline: 0, search: 0, discover: 0 }
 
+      // Source 1: Bot's home timeline
       try {
         const { feed } = await botClient.getTimeline(30)
         const timelineCandidates = feed
           .filter(f => {
             const record = f.post.record as { createdAt?: string }
-            return !record.createdAt || record.createdAt >= sixHoursAgo
+            return !record.createdAt || record.createdAt >= twelveHoursAgo
           })
           .map(f => ({
             postUri: f.post.uri,
@@ -674,26 +676,53 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
             text: (f.post.record as { text?: string }).text ?? '',
           }))
         allCandidates.push(...timelineCandidates)
+        debugSources.timeline = timelineCandidates.length
       } catch {
-        // Timeline fetch failed
+        // Timeline fetch failed (common for custom PDS bots)
       }
 
+      // Source 2: Topic-based search via public AppView
       const topics = pet.meme_personality.postingConfig.topicAffinity
       if (topics.length > 0) {
-        const searchTopics = [...topics].sort(() => Math.random() - 0.5).slice(0, 2)
+        const searchTopics = [...topics].sort(() => Math.random() - 0.5).slice(0, 3)
         for (const topic of searchTopics) {
           try {
-            const posts = await botClient.searchPosts({ query: topic, sort: 'top', limit: 10, since: sixHoursAgo })
-            allCandidates.push(...posts.map(p => ({
+            const posts = await botClient.searchPosts({ query: topic, sort: 'top', limit: 15 })
+            const mapped = posts.map(p => ({
               postUri: p.uri,
               postCid: p.cid,
               authorHandle: p.author.handle,
               authorDid: p.author.did,
               text: (p.record as { text?: string }).text ?? '',
-            })))
+            }))
+            allCandidates.push(...mapped)
+            debugSources.search += mapped.length
           } catch {
-            // Search failed
+            // Search failed for this topic
           }
+        }
+      }
+
+      // Source 3: Discover/What's Hot feed as fallback
+      if (allCandidates.length < 10) {
+        try {
+          const discoverPosts = await botClient.getDiscoverFeed(20)
+          const discoverCandidates = discoverPosts
+            .filter(f => {
+              const record = f.post.record as { createdAt?: string }
+              return !record.createdAt || record.createdAt >= twelveHoursAgo
+            })
+            .map(f => ({
+              postUri: f.post.uri,
+              postCid: f.post.cid,
+              authorHandle: f.post.author.handle,
+              authorDid: f.post.author.did,
+              text: (f.post.record as { text?: string }).text ?? '',
+            }))
+          allCandidates.push(...discoverCandidates)
+          debugSources.discover = discoverCandidates.length
+        } catch {
+          // Discover feed unavailable
         }
       }
 
@@ -726,9 +755,21 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
         firstInteractionMap[f.candidate.postUri] = f.isFirstInteraction ?? true
       }
 
+      // Collect filter stats for debugging
+      const filterReasons = new Map<string, number>()
+      for (const f of filtered) {
+        if (f.filtered && f.filterReason) {
+          filterReasons.set(f.filterReason, (filterReasons.get(f.filterReason) ?? 0) + 1)
+        }
+      }
+
       return {
         candidates: passed.map(f => f.candidate),
         firstInteractionMap,
+        debugSources,
+        rawCount: allCandidates.length,
+        dedupedCount: deduped.length,
+        filterReasons: Object.fromEntries(filterReasons),
       }
     })
 
@@ -741,7 +782,13 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
           petId,
           activityType: 'engagement_skipped',
           content: 'No suitable engagement candidates found',
-          metadata: { reason: 'no_candidates' },
+          metadata: {
+            reason: 'no_candidates',
+            sources: discoveryResult.debugSources,
+            rawCount: discoveryResult.rawCount,
+            dedupedCount: discoveryResult.dedupedCount,
+            filterReasons: discoveryResult.filterReasons,
+          },
         })
       })
       return

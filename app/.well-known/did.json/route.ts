@@ -9,7 +9,7 @@
 
 import { NextResponse } from 'next/server'
 
-const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? process.env.VERCEL_PROJECT_PRODUCTION_URL ?? 'localhost:3000'
+const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? 'memepet-agent.0.space'
 
 export async function GET() {
   const serviceDid = `did:web:${FEED_HOSTNAME}`
