@@ -27,11 +27,10 @@ import type { CraftingWorkflow } from './workflow-interface'
 import { loadBotMemory, saveBotMemory, appendPostToMemory } from '@/lib/agent/memory/bot-memory-service'
 import type { RecentPostDigest } from '@/lib/agent/types/bot-memory'
 import { evaluateEngagementCandidates, type EngagementCandidateInput } from './modules/bluesky-post-generator'
-import { preFilterCandidates } from './modules/engagement-filter'
+import { preFilterCandidates, loadPreviouslyInteractedDids } from './modules/engagement-filter'
 import {
   loadRelationship,
   updateRelationshipAfterInteraction,
-  computeSentimentDelta,
   formatRelationshipForPrompt,
 } from '@/lib/agent/memory/relationship-memory-service'
 import { decideImageGeneration } from './modules/bluesky-image-prompt-generator'
@@ -139,9 +138,13 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     // Image generation (personality-based probability)
     const imageResult = BLUESKY_CONFIG.FEATURE_FLAGS.IMAGE_GENERATION_ENABLED
       ? await this.context.run('try-image', async () => {
-          const postsSinceLastImage = memory.recentPosts.filter(
-            (p: RecentPostDigest) => !('hasImage' in p)
-          ).length
+          // Count posts since the last image post
+          const lastImageIdx = memory.recentPosts.findIndex(
+            (p: RecentPostDigest) => p.hasImage === true
+          )
+          const postsSinceLastImage = lastImageIdx === -1
+            ? memory.recentPosts.length
+            : lastImageIdx
           const decision = await decideImageGeneration({
             personality: pet.meme_personality,
             postText: generatedPost.text,
@@ -173,6 +176,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         mood: generatedPost.mood,
         topic: generatedPost.topicTag,
         intentType: generatedPost.intentType,
+        hasImage: !!imageResult,
       }
 
       let updatedMemory = appendPostToMemory(memory, digest)
@@ -366,6 +370,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
           tone: generatedReply.tone,
           inReplyTo: notification.uri,
           inReplyToAuthor: notification.authorHandle,
+          inReplyToAuthorDid: notification.authorDid,
           threadUri: notification.rootUri ?? notification.uri
         }
       })
@@ -499,7 +504,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
       return this.loadPetData(petId)
     })
 
-    const candidates = await this.context.run('discover-candidates', async () => {
+    const discoveryResult = await this.context.run('discover-candidates', async () => {
       const botClient = await this.createAuthenticatedClient(pet)
       const allCandidates: EngagementCandidateInput[] = []
       const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
@@ -559,9 +564,26 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
 
       const otherPetDids = new Set(petDids?.map(p => p.did).filter(Boolean) ?? [])
 
-      const filtered = preFilterCandidates(deduped, botClient.did, otherPetDids)
-      return filtered.filter(f => !f.filtered).map(f => f.candidate).slice(0, 15)
+      // Load previously interacted user DIDs for opt-in check
+      const previouslyInteractedDids = await loadPreviouslyInteractedDids(petId, supabase)
+
+      const filtered = preFilterCandidates(deduped, botClient.did, otherPetDids, previouslyInteractedDids)
+      const passed = filtered.filter(f => !f.filtered).slice(0, 15)
+
+      // Build a map of postUri -> isFirstInteraction for downstream use
+      const firstInteractionMap: Record<string, boolean> = {}
+      for (const f of passed) {
+        firstInteractionMap[f.candidate.postUri] = f.isFirstInteraction ?? true
+      }
+
+      return {
+        candidates: passed.map(f => f.candidate),
+        firstInteractionMap,
+      }
     })
+
+    const candidates = discoveryResult.candidates
+    const firstInteractionMap = discoveryResult.firstInteractionMap
 
     if (candidates.length === 0) {
       await this.context.run('log-no-candidates', async () => {
@@ -612,11 +634,18 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     for (let i = 0; i < actionable.length; i++) {
       const decision = actionable[i]
       const candidate = candidates[decision.postIndex]
+      const isFirstInteraction = firstInteractionMap[candidate.postUri] ?? true
+
+      // Opt-in enforcement: downgrade comment/quote to like for first-time users
+      // This prevents the bot from being flagged as spam by Bluesky
+      const effectiveAction = isFirstInteraction
+        ? 'like' as const
+        : decision.action
 
       await this.context.run(`engage-${i}`, async () => {
         const client = await this.createAuthenticatedClient(pet)
 
-        if (decision.action === 'like' || decision.action === 'like_and_comment' || decision.action === 'quote_and_like') {
+        if (effectiveAction === 'like' || effectiveAction === 'like_and_comment' || effectiveAction === 'quote_and_like') {
           await client.like(candidate.postUri, candidate.postCid)
           await this.logActivity({
             petId,
@@ -629,11 +658,13 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
               relevanceScore: decision.relevanceScore,
               tone: decision.tone,
               sessionMood: decisions.sessionMood,
+              isFirstInteraction,
+              originalAction: isFirstInteraction ? decision.action : undefined,
             },
           })
         }
 
-        if ((decision.action === 'comment' || decision.action === 'like_and_comment') && decision.comment) {
+        if ((effectiveAction === 'comment' || effectiveAction === 'like_and_comment') && decision.comment) {
           const replyRef = await client.buildReplyRef(candidate.postUri, candidate.postCid)
           const result = await client.reply(decision.comment, replyRef)
           await this.logActivity({
@@ -653,7 +684,7 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
           })
         }
 
-        if ((decision.action === 'quote' || decision.action === 'quote_and_like') && decision.quoteText) {
+        if ((effectiveAction === 'quote' || effectiveAction === 'quote_and_like') && decision.quoteText) {
           const result = await client.quotePost(decision.quoteText, candidate.postUri, candidate.postCid)
           await this.logActivity({
             petId,

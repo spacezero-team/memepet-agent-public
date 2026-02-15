@@ -15,6 +15,7 @@ const RecentPostDigestSchema = z.object({
   mood: z.string(),
   topic: z.string(),
   intentType: z.string(),
+  hasImage: z.boolean().optional(),
 })
 
 const RelationshipEntrySchema = z.object({
