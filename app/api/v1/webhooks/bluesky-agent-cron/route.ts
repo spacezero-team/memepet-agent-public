@@ -23,6 +23,7 @@ import { logWorkflow } from '@/lib/utils/workflow-logger'
 import { evaluatePostingDecision, emptyScheduleState, type PetScheduleState, type Chronotype } from '@/lib/agent/posting-rhythm'
 import { buildPersonalityFromRow } from '@/lib/agent/pet-personality-builder'
 import { decryptIfNeeded } from '@/lib/utils/encrypt'
+import { ensureVercelDomains } from '@/lib/utils/vercel-domain'
 
 export const maxDuration = 60
 
@@ -71,6 +72,12 @@ async function handleCron(req: Request) {
     if (activeBots.length === 0) {
       return NextResponse.json({ message: 'No active Bluesky bots' })
     }
+
+    // Ensure Vercel domain aliases exist for all active bot handles
+    // (fire-and-forget: failures are logged but don't block the cron)
+    ensureVercelDomainsForBots(activeBots).catch(() => {
+      // Silently ignore — individual results are logged inside
+    })
 
     // ── Proactive Posting ────────────────────────
     if (mode === 'proactive' || mode === 'both') {
@@ -394,6 +401,36 @@ async function shouldPetEngageNow(petId: string): Promise<boolean> {
   const elapsed = Date.now() - new Date(data.created_at).getTime()
   const jitter = 90 * 60 * 1000 * (0.8 + Math.random() * 0.4)
   return elapsed >= jitter
+}
+
+// ─── Vercel Domain Registration ──────────────────────
+
+/** In-memory set of handles whose Vercel domain has been confirmed this process */
+const confirmedDomains = new Set<string>()
+
+async function ensureVercelDomainsForBots(bots: ReadonlyArray<ActiveBot>): Promise<void> {
+  const unconfirmed = bots
+    .map(b => b.handle)
+    .filter(h => !confirmedDomains.has(h))
+
+  if (unconfirmed.length === 0) return
+
+  const results = await ensureVercelDomains(unconfirmed)
+
+  const logger = logWorkflow('BLUESKY_AGENT', 'domain-registration')
+  for (const result of results) {
+    if (result.success) {
+      confirmedDomains.add(result.handle)
+      if (!result.alreadyExists) {
+        logger.progress('vercel-domain-added', { handle: result.handle })
+      }
+    } else {
+      logger.api('vercel', 'add-domain', 'error', {
+        handle: result.handle,
+        message: result.error,
+      })
+    }
+  }
 }
 
 // ─── Interaction Pair Selection ──────────────────────
