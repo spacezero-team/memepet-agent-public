@@ -29,37 +29,31 @@ export async function generateMemeImage(params: {
   const startTime = Date.now()
 
   try {
-    const model = google('gemini-2.0-flash-001')
-
-    const { response } = await generateText({
-      model,
+    const result = await generateText({
+      model: google('gemini-2.0-flash-exp-image-generation'),
+      providerOptions: {
+        google: { responseModalities: ['TEXT', 'IMAGE'] },
+      },
       prompt: `Generate a fun meme-style image. ${params.imagePrompt}
 
 Style guidelines:
 - Colorful, expressive, internet meme aesthetic
 - Simple composition, clear focal point
-- No text overlays (the post text handles that)
+- IMPORTANT: Do NOT include any text, words, or letters in the image
 - Cute/funny animal or creature vibes
 - Square aspect ratio preferred`,
-    }) as any
+    })
 
-    // Extract image from response parts
-    const imagePart = response?.messages
-      ?.flatMap((m: any) => m.content)
-      ?.find((part: any) => part.type === 'file' || part.type === 'image')
+    // AI SDK v5: generated images are in result.files
+    const imageFile = result.files.find(f => f.mediaType.startsWith('image/'))
 
-    if (!imagePart) {
+    if (!imageFile) {
       return null
     }
 
-    const base64Data = imagePart.data ?? imagePart.image
-    if (!base64Data) return null
-
-    const imageBlob = Buffer.from(base64Data, 'base64')
-
     return {
-      imageBlob: new Uint8Array(imageBlob),
-      mimeType: imagePart.mimeType ?? 'image/png',
+      imageBlob: new Uint8Array(imageFile.uint8Array),
+      mimeType: imageFile.mediaType,
       imageAlt: params.imageAlt,
       generationTimeMs: Date.now() - startTime,
     }
