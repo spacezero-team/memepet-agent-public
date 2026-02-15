@@ -42,23 +42,39 @@ export interface BlueskyBotConfig {
 }
 
 /**
- * Rate limit tracker for a single bot account
+ * Rate limit tracker for a single bot account.
+ * Uses in-memory tracking with DB-backed safety checks
+ * to survive Vercel serverless cold starts and deploys.
  */
 class RateLimitTracker {
   private hourlyPoints = 0
   private dailyPoints = 0
   private hourlyResetAt: number
   private dailyResetAt: number
+  private dbCheckDone = false
 
-  constructor() {
+  constructor(private readonly petId: string) {
     const now = Date.now()
     this.hourlyResetAt = now + 60 * 60 * 1000
     this.dailyResetAt = now + 24 * 60 * 60 * 1000
   }
 
-  canPost(): boolean {
+  async canPost(): Promise<boolean> {
     this.maybeReset()
     const postCost = AT_PROTO_RATE_LIMITS.POINTS_PER_POST
+
+    // First call: seed from DB to survive cold starts
+    if (!this.dbCheckDone) {
+      this.dbCheckDone = true
+      try {
+        const dbCounts = await this.loadRecentPostCounts()
+        this.hourlyPoints = dbCounts.hourlyCount * AT_PROTO_RATE_LIMITS.POINTS_PER_POST
+        this.dailyPoints = dbCounts.dailyCount * AT_PROTO_RATE_LIMITS.POINTS_PER_POST
+      } catch {
+        // Non-fatal: fall back to in-memory only
+      }
+    }
+
     return (
       this.hourlyPoints + postCost <= AT_PROTO_RATE_LIMITS.POINTS_PER_HOUR &&
       this.dailyPoints + postCost <= AT_PROTO_RATE_LIMITS.POINTS_PER_DAY
@@ -83,6 +99,45 @@ class RateLimitTracker {
       this.dailyResetAt = now + 24 * 60 * 60 * 1000
     }
   }
+
+  private async loadRecentPostCounts(): Promise<{ hourlyCount: number; dailyCount: number }> {
+    const supabase = getServiceSupabase()
+    const now = new Date()
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString()
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()
+
+    const postActivityTypes = [
+      'proactive_post', 'reactive_reply', 'interaction_initiate',
+      'proactive_thread', 'engagement_comment', 'engagement_quote',
+    ]
+
+    const [hourlyResult, dailyResult] = await Promise.all([
+      (supabase as any)
+        .from('bluesky_post_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('pet_id', this.petId)
+        .in('activity_type', postActivityTypes)
+        .gte('created_at', oneHourAgo) as { count: number | null; error: { message: string } | null },
+      (supabase as any)
+        .from('bluesky_post_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('pet_id', this.petId)
+        .in('activity_type', postActivityTypes)
+        .gte('created_at', oneDayAgo) as { count: number | null; error: { message: string } | null },
+    ])
+
+    if (hourlyResult.error) {
+      throw new Error(`Rate limit hourly check failed: ${hourlyResult.error.message}`)
+    }
+    if (dailyResult.error) {
+      throw new Error(`Rate limit daily check failed: ${dailyResult.error.message}`)
+    }
+
+    return {
+      hourlyCount: hourlyResult.count ?? 0,
+      dailyCount: dailyResult.count ?? 0,
+    }
+  }
 }
 
 /**
@@ -91,7 +146,7 @@ class RateLimitTracker {
 export class BlueskyBotClient {
   private agent: AtpAgent
   private session: BlueskySession | null = null
-  private rateLimiter = new RateLimitTracker()
+  private rateLimiter: RateLimitTracker
   private lastInteractionAt = 0
 
   constructor(
@@ -100,6 +155,7 @@ export class BlueskyBotClient {
     this.agent = new AtpAgent({
       service: BlueskyBotClient.resolveServiceUrl(config.handle)
     })
+    this.rateLimiter = new RateLimitTracker(config.petId)
   }
 
   /**
@@ -113,15 +169,16 @@ export class BlueskyBotClient {
     return BLUESKY_CONFIG.SERVICE_URL
   }
 
+  /** Login backoff state (stored in-memory per client instance) */
+  private loginAttempts = 0
+  private lastLoginAttemptAt = 0
+
   /**
    * Authenticate with Bluesky using app password.
-   * Tries to resume session from DB first, falls back to fresh login.
+   * Tries to resume session from DB first, validates with lightweight check,
+   * falls back to fresh login with exponential backoff.
    */
   async authenticate(): Promise<void> {
-    console.info(
-      `[BlueskyBot] Authenticating ${this.config.handle} → ${this.agent.service.toString()}`
-    )
-
     // Try resuming persisted session
     const persisted = await this.loadPersistedSession()
     if (persisted) {
@@ -133,27 +190,58 @@ export class BlueskyBotClient {
           refreshJwt: persisted.refreshJwt,
           active: true
         })
-        this.session = persisted
+
+        // Verify session is still valid with lightweight check
+        await this.agent.getProfile({ actor: persisted.did })
+
+        this.session = {
+          did: this.agent.session?.did ?? persisted.did,
+          handle: this.agent.session?.handle ?? persisted.handle,
+          accessJwt: this.agent.session?.accessJwt ?? persisted.accessJwt,
+          refreshJwt: this.agent.session?.refreshJwt ?? persisted.refreshJwt,
+        }
+
+        // Persist refreshed tokens if they changed
+        if (this.session.accessJwt !== persisted.accessJwt) {
+          await this.persistSession(this.session)
+        }
+
+        this.loginAttempts = 0
         return
       } catch {
-        // Session expired, fall through to fresh login
+        // Session expired or invalid, fall through to fresh login
       }
     }
 
-    // Fresh login
-    const response = await this.agent.login({
-      identifier: this.config.handle,
-      password: this.config.appPassword
-    })
-
-    this.session = {
-      did: response.data.did,
-      handle: response.data.handle,
-      accessJwt: response.data.accessJwt,
-      refreshJwt: response.data.refreshJwt
+    // Exponential backoff for login attempts (max 60s)
+    const now = Date.now()
+    const backoffMs = Math.min(1000 * Math.pow(2, this.loginAttempts), 60_000)
+    if (this.loginAttempts > 0 && now - this.lastLoginAttemptAt < backoffMs) {
+      throw new Error(
+        `[BlueskyBot] Login backoff for ${this.config.handle}: wait ${Math.ceil((backoffMs - (now - this.lastLoginAttemptAt)) / 1000)}s`
+      )
     }
+    this.lastLoginAttemptAt = now
 
-    await this.persistSession(this.session)
+    try {
+      const response = await this.agent.login({
+        identifier: this.config.handle,
+        password: this.config.appPassword
+      })
+
+      this.session = {
+        did: response.data.did,
+        handle: response.data.handle,
+        accessJwt: response.data.accessJwt,
+        refreshJwt: response.data.refreshJwt
+      }
+
+      await this.persistSession(this.session)
+      this.loginAttempts = 0
+    } catch (error) {
+      this.loginAttempts++
+      throw error
+    }
   }
 
   get did(): string {
@@ -173,7 +261,7 @@ export class BlueskyBotClient {
    */
   async post(text: string, imageBlob?: Uint8Array, imageAlt?: string): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
-    this.ensureRateLimit()
+    await this.ensureRateLimit()
     this.ensureCooldown()
 
     const rt = new RichText({ text })
@@ -215,7 +303,7 @@ export class BlueskyBotClient {
     replyRef: BlueskyReplyRef
   ): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
-    this.ensureRateLimit()
+    await this.ensureRateLimit()
     this.ensureCooldown()
 
     const rt = new RichText({ text })
@@ -247,7 +335,7 @@ export class BlueskyBotClient {
     quotedCid: string
   ): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
-    this.ensureRateLimit()
+    await this.ensureRateLimit()
     this.ensureCooldown()
 
     const rt = new RichText({ text })
@@ -432,8 +520,9 @@ export class BlueskyBotClient {
     }
   }
 
-  private ensureRateLimit(): void {
-    if (!this.rateLimiter.canPost()) {
+  private async ensureRateLimit(): Promise<void> {
+    const canPost = await this.rateLimiter.canPost()
+    if (!canPost) {
       throw new Error(`Bluesky rate limit exceeded for ${this.config.handle}. Try again later.`)
     }
   }
