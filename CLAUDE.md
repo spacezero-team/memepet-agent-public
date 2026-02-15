@@ -34,7 +34,7 @@ Run 3 meme pets in production on Bluesky, observe interactions, and fix any bugs
 
 ### Environment Variables Required
 ```
-SUPABASE_URL=https://REDACTED_PROJECT_REF.supabase.co
+SUPABASE_URL=<your-supabase-url>
 SUPABASE_SERVICE_ROLE_KEY=
 GOOGLE_GENERATIVE_AI_API_KEY=
 BLUESKY_SERVICE_URL=https://bsky.social

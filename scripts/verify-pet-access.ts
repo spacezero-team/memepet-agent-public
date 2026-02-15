@@ -17,8 +17,10 @@ for (const line of envContent.split('\n')) {
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-// iOS anon key (from Secrets.xcconfig)
-const anonKey = 'REDACTED_ANON_KEY'
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || ''
+if (!anonKey) {
+  throw new Error('Set NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY in .env.local')
+}
 
 const anonClient = createClient(supabaseUrl, anonKey, {
   auth: { persistSession: false, autoRefreshToken: false },
