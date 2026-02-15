@@ -369,7 +369,7 @@ async function testFeedGenerator(): Promise<void> {
     }
 
     // Check the feed skeleton endpoint directly (our server)
-    const feedHostname = process.env.FEED_HOSTNAME ?? 'memepet-agent.0.space'
+    const feedHostname = process.env.FEED_HOSTNAME ?? 'memepet.0.space'
     const skeletonUrl = `https://${feedHostname}/xrpc/app.bsky.feed.getFeedSkeleton?feed=${encodeURIComponent(feedUri)}&limit=5`
     const { data: skeleton, error: skelError } = await fetchJson<{
       feed: Array<{ post: string }>

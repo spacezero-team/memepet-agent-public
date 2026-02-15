@@ -9,7 +9,7 @@
 
 import { NextResponse } from 'next/server'
 
-const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? 'memepet-agent.0.space'
+const FEED_HOSTNAME = process.env.FEED_HOSTNAME ?? 'memepet.0.space'
 
 export async function GET() {
   const serviceDid = `did:web:${FEED_HOSTNAME}`

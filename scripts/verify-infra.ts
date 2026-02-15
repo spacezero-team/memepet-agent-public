@@ -197,7 +197,7 @@ async function checkSessionPersistence(): Promise<void> {
 
 // ── 5. Vercel production endpoint ────────────────────────────────────────────
 async function checkVercelEndpoint(): Promise<void> {
-  const url = 'https://memepet-agent.0.space/api/v1/workflows/bluesky-agent'
+  const url = 'https://memepet.0.space/api/v1/workflows/bluesky-agent'
   try {
     const res = await fetch(url, { method: 'GET' })
     const body = await res.text()

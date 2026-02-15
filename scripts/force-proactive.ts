@@ -27,7 +27,7 @@ const supabase = createClient(
 )
 
 const QSTASH_TOKEN = process.env.QSTASH_TOKEN || ''
-const WORKFLOW_URL = 'https://memepet-agent.0.space/api/v1/workflows/bluesky-agent'
+const WORKFLOW_URL = 'https://memepet.0.space/api/v1/workflows/bluesky-agent'
 
 async function main() {
   // Get 3 active bots
