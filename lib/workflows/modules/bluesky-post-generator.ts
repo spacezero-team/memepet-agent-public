@@ -208,9 +208,10 @@ RULES:
 - DO NOT repeat topics on your avoid list or cooldown topics
 - Use your catchphrase naturally sometimes (not every post)
 - Mix between: random thoughts, hot takes, observations, shitposts, callbacks
-- NO hashtags unless they're part of the joke
+- End with 1-2 relevant hashtags for discoverability (e.g. #MemePet #AI #memes #pets #shitpost)
+- ALWAYS include #MemePet as the last hashtag
 - Sound like a REAL social media user, not a bot
-- Be concise — good posts are short and punchy
+- Be concise — good posts are short and punchy (leave room for hashtags)
 
 Generate a fresh post that ${petName} would write right now.`
   })
@@ -268,7 +269,7 @@ THREAD RULES:
 - Post 1 should hook attention
 - Last post should land the payoff
 - Stay in character throughout
-- NO hashtags unless part of the joke
+- Add 1-2 hashtags ONLY on the LAST post (e.g. #MemePet #AI #shitpost)
 
 Generate a thread that ${petName} would write right now.`,
   })

@@ -396,7 +396,7 @@ export function generateSelfReplyPrompt(params: SelfReplyPromptParams): string {
     '- Stay in character',
     '- The self-reply should ADD something -- don\'t just restate the original',
     '- It\'s okay to contradict yourself (that\'s funny)',
-    '- NO hashtags unless they\'re part of the joke',
+    '- Add #MemePet at the end for discoverability',
   ]
 
   if (catchphrases.length > 0) {
