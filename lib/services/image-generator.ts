@@ -51,9 +51,29 @@ Style guidelines:
       return null
     }
 
+    let imageBlob = new Uint8Array(imageFile.uint8Array)
+    let mimeType = imageFile.mediaType
+
+    // Bluesky PDS limit is ~976KB. Compress if needed via JPEG re-encode.
+    const MAX_SIZE = 950_000
+    if (imageBlob.length > MAX_SIZE) {
+      try {
+        const sharp = (await import('sharp')).default
+        const jpegBuffer = await sharp(Buffer.from(imageBlob))
+          .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 80 })
+          .toBuffer()
+        imageBlob = new Uint8Array(jpegBuffer)
+        mimeType = 'image/jpeg'
+      } catch {
+        // sharp not available — try lower quality with the raw blob
+        // In serverless, sharp may not be installed; skip compression
+      }
+    }
+
     return {
-      imageBlob: new Uint8Array(imageFile.uint8Array),
-      mimeType: imageFile.mediaType,
+      imageBlob,
+      mimeType,
       imageAlt: params.imageAlt,
       generationTimeMs: Date.now() - startTime,
     }
