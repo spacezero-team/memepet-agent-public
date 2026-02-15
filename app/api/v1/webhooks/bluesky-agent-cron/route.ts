@@ -94,16 +94,23 @@ async function handleCron(req: Request) {
           utcOffsetHours: bot.utcOffsetHours,
         })
 
-        await persistScheduleState(bot.petId, decision.updatedState)
+        if (!decision.shouldPost) {
+          // Persist state changes (mood roll, daily reset) even when skipping
+          await persistScheduleState(bot.petId, decision.updatedState)
+          return null
+        }
 
-        if (!decision.shouldPost) return null
-
+        // Trigger workflow BEFORE persisting post count to avoid phantom posts
         const { workflowRunId } = await triggerWorkflow(
           '/api/v1/workflows/bluesky-agent',
           { mode: 'proactive' as const, petId: bot.petId },
           'BLUESKY_AGENT',
           { retries: 2 }
         )
+
+        // Only persist lastPostAt + postsToday after successful trigger
+        await persistScheduleState(bot.petId, decision.updatedState)
+
         return `pet:${bot.petId} run:${workflowRunId} (${decision.reason})`
       }))
 
