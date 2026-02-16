@@ -24,9 +24,30 @@ export interface FilteredCandidate {
 }
 
 const SENSITIVE_KEYWORDS = [
-  'politics', 'election', 'trump', 'biden', 'democrat', 'republican',
-  'abortion', 'gun control', 'immigration', 'genocide', 'holocaust',
-  'suicide', 'self-harm', 'nazi', 'terrorist', 'mass shooting',
+  // Political - US
+  'trump', 'biden', 'harris', 'desantis', 'obama', 'maga', 'democrat', 'republican',
+  'gop', 'liberal', 'conservative', 'left-wing', 'right-wing', 'far-right', 'far-left',
+  'congress', 'senate', 'capitol', 'white house', 'supreme court',
+  // Political - elections
+  'election', 'vote', 'ballot', 'polling', 'primary', 'caucus', 'electoral',
+  'campaign', 'inauguration', 'impeach',
+  // Political - hot-button issues
+  'abortion', 'pro-life', 'pro-choice', 'gun control', 'second amendment', '2nd amendment',
+  'immigration', 'border wall', 'deportation', 'refugee', 'asylum seeker',
+  'climate change denial', 'woke', 'anti-woke', 'dei', 'critical race theory', 'crt',
+  'defund police', 'blm', 'antifa', 'proud boys',
+  // Political - international
+  'putin', 'zelensky', 'xi jinping', 'netanyahu', 'gaza', 'palestine conflict',
+  'sanctions', 'nato',
+  // Political - general
+  'politics', 'partisan', 'bipartisan', 'lobbyist', 'political', 'politician',
+  'legislation', 'government shutdown', 'filibuster', 'gerrymandering',
+  // Political - Korean
+  '정치', '대통령', '국회', '여당', '야당', '보수', '진보',
+  '탄핵', '선거', '투표', '국민의힘', '더불어민주당', '민주당',
+  '좌파', '우파', '빨갱이', '수꼴',
+  // Violence & harmful content
+  'genocide', 'holocaust', 'suicide', 'self-harm', 'nazi', 'terrorist', 'mass shooting',
 ]
 
 const SPAM_INDICATORS = [

@@ -31,6 +31,7 @@ import { loadBotMemory, saveBotMemory, appendPostToMemory } from '@/lib/agent/me
 import type { RecentPostDigest } from '@/lib/agent/types/bot-memory'
 import { evaluateEngagementCandidates, type EngagementCandidateInput } from './modules/bluesky-post-generator'
 import { preFilterCandidates, loadPreviouslyInteractedDids } from './modules/engagement-filter'
+import { isPoliticalContent } from './modules/political-filter'
 import {
   loadRelationship,
   updateRelationshipAfterInteraction,
@@ -436,12 +437,30 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return
     }
 
-    // Step 2: Get thread context
+    // Step 2: Political content filter — skip if notification text is political
+    const isPolitical = isPoliticalContent(notification.text)
+    if (isPolitical) {
+      await this.context.run('skip-political-reply', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'reply_skipped',
+          content: `Skipped political content from @${notification.authorHandle}`,
+          metadata: {
+            reason: 'political_content',
+            inReplyTo: notification.uri,
+            inReplyToAuthor: notification.authorHandle,
+          }
+        })
+      })
+      return
+    }
+
+    // Step 3: Get thread context
     const threadContext = await this.context.run('get-thread-context', async () => {
       return this.getThreadContext(petId, notification.rootUri ?? notification.uri)
     })
 
-    // Step 3: Generate reply
+    // Step 4: Generate reply
     const generatedReply = await this.context.run('generate-reply', async () => {
       return generateReply(
         pet.meme_personality,
@@ -465,7 +484,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return
     }
 
-    // Step 4: Build reply ref and publish
+    // Step 5: Build reply ref and publish
     const replyResult = await this.context.run('publish-reply', async () => {
       const botClient = await this.createAuthenticatedClient(pet)
 
@@ -483,7 +502,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return botClient.reply(generatedReply.text, replyRef)
     })
 
-    // Step 5: Log activity + update relationship if replying to another pet
+    // Step 6: Log activity + update relationship if replying to another pet
     await this.context.run('log-reply-activity', async () => {
       await this.logActivity({
         petId,
@@ -582,7 +601,23 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return
     }
 
-    // Step 4: Post the interaction message (mention the target)
+    // Step 4: Political filter — skip if target's recent post or generated message is political
+    if (isPoliticalContent(targetRecentPost) || isPoliticalContent(decision.openingMessage)) {
+      await this.context.run('skip-political-interaction', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'interaction_skipped',
+          content: `Skipped political interaction with ${targetPet.pet_name}`,
+          metadata: {
+            targetPetId,
+            reason: 'political_content',
+          }
+        })
+      })
+      return
+    }
+
+    // Step 5: Post the interaction message (mention the target)
     const postResult = await this.context.run('post-interaction', async () => {
       const botClient = await this.createAuthenticatedClient(myPet)
       // Ensure the message mentions the target
@@ -598,7 +633,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return botClient.post(message)
     })
 
-    // Step 5: Log interaction + update relationship
+    // Step 6: Log interaction + update relationship
     await this.context.run('log-interaction', async () => {
       await this.logActivity({
         petId,
@@ -619,7 +654,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       })
     })
 
-    // Step 6: 20% chance the target pet gets notified to respond immediately
+    // Step 7: 20% chance the target pet gets notified to respond immediately
     await this.context.run('maybe-trigger-response', async () => {
       const IMMEDIATE_RESPONSE_PROBABILITY = 0.2
       const shouldTriggerResponse = Math.random() < IMMEDIATE_RESPONSE_PROBABILITY
@@ -841,6 +876,17 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
         : decision.action
 
       await this.context.run(`engage-${i}`, async () => {
+        // Political content filter — skip engagement with political posts
+        if (isPoliticalContent(candidate.text)) {
+          await this.logActivity({
+            petId,
+            activityType: 'engagement_skipped',
+            content: `Skipped political post by @${candidate.authorHandle}`,
+            metadata: { reason: 'political_content', engagedPostUri: candidate.postUri },
+          })
+          return
+        }
+
         const client = await this.createAuthenticatedClient(pet)
 
         if (effectiveAction === 'like' || effectiveAction === 'like_and_comment' || effectiveAction === 'quote_and_like') {

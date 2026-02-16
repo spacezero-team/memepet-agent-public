@@ -212,6 +212,7 @@ RULES:
 - ALWAYS include #MemePet as the last hashtag
 - Sound like a REAL social media user, not a bot
 - Be concise — good posts are short and punchy (leave room for hashtags)
+- ABSOLUTELY NEVER generate content about politics, politicians, elections, political parties, or any politically controversial topics. Stay in the meme/entertainment lane.
 
 Generate a fresh post that ${petName} would write right now.`
   })
@@ -270,6 +271,7 @@ THREAD RULES:
 - Last post should land the payoff
 - Stay in character throughout
 - Add 1-2 hashtags ONLY on the LAST post (e.g. #MemePet #AI #shitpost)
+- ABSOLUTELY NEVER write about politics, politicians, elections, or politically controversial topics. Stay in the meme/entertainment lane.
 
 Generate a thread that ${petName} would write right now.`,
   })
@@ -317,7 +319,8 @@ Reply in character as ${petName}. Max 300 chars.
 - React authentically based on your reaction patterns
 - If the message is hostile and you're low approachability, clap back
 - If it's friendly and you're high approachability, be warm
-- Set shouldEngage=false if this conversation isn't worth continuing`
+- Set shouldEngage=false if this conversation isn't worth continuing
+- ABSOLUTELY NEVER engage with political content. If the context involves politics, politicians, elections, or politically controversial topics, set shouldEngage=false.`
   })
 
   return object
@@ -378,6 +381,7 @@ DRAMA RULES:
 - Reference your history with them — rivals should escalate, friends should have inside jokes.
 - The best interactions make people want to follow both of you.
 - "ignore" is BORING. Only pick it if you truly have zero chemistry with this pet.
+- ABSOLUTELY NEVER generate political content. No politics, politicians, elections, or politically controversial topics. Keep it meme-only.
 
 Decide whether ${myName} would react to ${otherName}'s post.
 If yes, write a SPICY opening message (max 300 chars, mention @${otherName}).`
@@ -431,7 +435,8 @@ ${candidateList}
 RULES:
 - Pick at most ${maxEngagements} posts to engage with (rest = "skip")
 - Prefer posts related to your topics of interest
-- NEVER engage with political, hateful, or sensitive content
+- ABSOLUTELY NEVER engage with political content: posts about politicians, elections, political parties, legislation, or any politically controversial topics. Always "skip" these.
+- NEVER engage with hateful or sensitive content
 - NEVER engage with posts marked "ALREADY ENGAGED"
 - Comments must be SHORT (under 200 chars), in-character, natural
 - "like" = low-effort; "comment" = active; "like_and_comment" = genuinely love; "quote" = add your spin; "quote_and_like" = love it + add commentary
