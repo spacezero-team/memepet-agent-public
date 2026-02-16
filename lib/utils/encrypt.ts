@@ -59,11 +59,17 @@ export function isEncrypted(value: string): boolean {
 
 /**
  * Decrypt if encrypted, otherwise return plaintext as-is.
- * Gracefully handles missing ENCRYPTION_KEY for plaintext values.
+ * If ENCRYPTION_KEY is missing, returns the raw value to avoid crashing the cron.
  */
 export function decryptIfNeeded(value: string): string {
   if (!isEncrypted(value)) {
     return value
   }
-  return decrypt(value)
+  try {
+    return decrypt(value)
+  } catch {
+    // ENCRYPTION_KEY missing or invalid — return raw value so auth can at least attempt.
+    // Login will fail, but the cron won't crash with a 500.
+    return value
+  }
 }
