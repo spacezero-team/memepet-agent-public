@@ -31,7 +31,7 @@ import { loadBotMemory, saveBotMemory, appendPostToMemory } from '@/lib/agent/me
 import type { RecentPostDigest } from '@/lib/agent/types/bot-memory'
 import { evaluateEngagementCandidates, type EngagementCandidateInput } from './modules/bluesky-post-generator'
 import { preFilterCandidates, loadPreviouslyInteractedDids } from './modules/engagement-filter'
-import { isPoliticalContent } from './modules/political-filter'
+import { isPoliticalContent, extractEmbeddedText, isPostPolitical } from './modules/political-filter'
 import {
   loadRelationship,
   updateRelationshipAfterInteraction,
@@ -704,13 +704,18 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
             const record = f.post.record as { createdAt?: string }
             return !record.createdAt || record.createdAt >= twelveHoursAgo
           })
-          .map(f => ({
-            postUri: f.post.uri,
-            postCid: f.post.cid,
-            authorHandle: f.post.author.handle,
-            authorDid: f.post.author.did,
-            text: (f.post.record as { text?: string }).text ?? '',
-          }))
+          .map(f => {
+            const postText = (f.post.record as { text?: string }).text ?? ''
+            const embed = (f.post as unknown as Record<string, unknown>).embed as Record<string, unknown> | undefined
+            const embeddedText = extractEmbeddedText(embed)
+            return {
+              postUri: f.post.uri,
+              postCid: f.post.cid,
+              authorHandle: f.post.author.handle,
+              authorDid: f.post.author.did,
+              text: embeddedText ? `${postText} ${embeddedText}` : postText,
+            }
+          })
         allCandidates.push(...timelineCandidates)
         debugSources.timeline = timelineCandidates.length
       } catch {
@@ -724,13 +729,18 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
         for (const topic of searchTopics) {
           try {
             const posts = await botClient.searchPosts({ query: topic, sort: 'top', limit: 15 })
-            const mapped = posts.map(p => ({
-              postUri: p.uri,
-              postCid: p.cid,
-              authorHandle: p.author.handle,
-              authorDid: p.author.did,
-              text: (p.record as { text?: string }).text ?? '',
-            }))
+            const mapped = posts.map(p => {
+              const postText = (p.record as { text?: string }).text ?? ''
+              const embed = (p as unknown as Record<string, unknown>).embed as Record<string, unknown> | undefined
+              const embeddedText = extractEmbeddedText(embed)
+              return {
+                postUri: p.uri,
+                postCid: p.cid,
+                authorHandle: p.author.handle,
+                authorDid: p.author.did,
+                text: embeddedText ? `${postText} ${embeddedText}` : postText,
+              }
+            })
             allCandidates.push(...mapped)
             debugSources.search += mapped.length
           } catch {
@@ -748,13 +758,18 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
               const record = f.post.record as { createdAt?: string }
               return !record.createdAt || record.createdAt >= twelveHoursAgo
             })
-            .map(f => ({
-              postUri: f.post.uri,
-              postCid: f.post.cid,
-              authorHandle: f.post.author.handle,
-              authorDid: f.post.author.did,
-              text: (f.post.record as { text?: string }).text ?? '',
-            }))
+            .map(f => {
+              const postText = (f.post.record as { text?: string }).text ?? ''
+              const embed = (f.post as unknown as Record<string, unknown>).embed as Record<string, unknown> | undefined
+              const embeddedText = extractEmbeddedText(embed)
+              return {
+                postUri: f.post.uri,
+                postCid: f.post.cid,
+                authorHandle: f.post.author.handle,
+                authorDid: f.post.author.did,
+                text: embeddedText ? `${postText} ${embeddedText}` : postText,
+              }
+            })
           allCandidates.push(...discoverCandidates)
           debugSources.discover = discoverCandidates.length
         } catch {
@@ -909,6 +924,16 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
         }
 
         if ((effectiveAction === 'comment' || effectiveAction === 'like_and_comment') && decision.comment) {
+          // Also filter the AI-generated comment text itself
+          if (isPoliticalContent(decision.comment)) {
+            await this.logActivity({
+              petId,
+              activityType: 'engagement_skipped',
+              content: `Skipped political comment text for @${candidate.authorHandle}`,
+              metadata: { reason: 'political_generated_comment', engagedPostUri: candidate.postUri },
+            })
+            return
+          }
           const replyRef = await client.buildReplyRef(candidate.postUri, candidate.postCid)
           const result = await client.reply(decision.comment, replyRef)
           await this.logActivity({
@@ -929,6 +954,16 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
         }
 
         if ((effectiveAction === 'quote' || effectiveAction === 'quote_and_like') && decision.quoteText) {
+          // Also filter the AI-generated quote text itself
+          if (isPoliticalContent(decision.quoteText)) {
+            await this.logActivity({
+              petId,
+              activityType: 'engagement_skipped',
+              content: `Skipped political quote text for @${candidate.authorHandle}`,
+              metadata: { reason: 'political_generated_quote', engagedPostUri: candidate.postUri },
+            })
+            return
+          }
           const result = await client.quotePost(decision.quoteText, candidate.postUri, candidate.postCid)
           await this.logActivity({
             petId,
