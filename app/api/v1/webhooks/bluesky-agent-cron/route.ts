@@ -22,6 +22,7 @@ import { BlueskyBotClient, type BlueskyBotConfig } from '@/lib/services/bluesky-
 import { logWorkflow } from '@/lib/utils/workflow-logger'
 import { evaluatePostingDecision, emptyScheduleState, type PetScheduleState, type Chronotype } from '@/lib/agent/posting-rhythm'
 import { buildPersonalityFromRow } from '@/lib/agent/pet-personality-builder'
+import { decryptIfNeeded } from '@/lib/utils/encrypt'
 
 export const maxDuration = 60
 
@@ -273,7 +274,7 @@ async function loadActiveBots(): Promise<ActiveBot[]> {
       petId: row.pet_id,
       handle: row.handle,
       did: row.did,
-      appPassword: row.app_password,
+      appPassword: decryptIfNeeded(row.app_password),
       frequency: (row.posting_frequency as 'high' | 'medium' | 'low') ?? 'medium',
       chronotype: (row.chronotype as Chronotype) ?? 'normal',
       scheduleState: (row.schedule_state as unknown as PetScheduleState) ?? emptyScheduleState(),

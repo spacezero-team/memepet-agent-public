@@ -51,6 +51,7 @@ import {
   generateReflections,
   applyReflectionsToMemory,
 } from '@/lib/agent/memory/reflection-service'
+import { decryptIfNeeded } from '@/lib/utils/encrypt'
 
 // ─── Request Types ──────────────────────────────────
 
@@ -1020,7 +1021,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       meme_personality: personality,
       bluesky_handle: botConfig.handle,
       bluesky_did: botConfig.did ?? null,
-      bluesky_app_password: botConfig.app_password
+      bluesky_app_password: decryptIfNeeded(botConfig.app_password)
     }
   }
 
