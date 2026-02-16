@@ -22,9 +22,16 @@ for (const line of envContent.split('\n')) {
 
 const supabaseUrl = process.env.SUPABASE_URL ?? ''
 
-// iOS anon key from Secrets.xcconfig
+// iOS anon key from env (set SUPABASE_ANON_KEY in .env.local)
 const IOS_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZW9xc3VpcXV1dmlwc2htcHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTUxMjYyMTEsImV4cCI6MjAxMDcwMjIxMX0.FacsD9CIiy_hNwkac-aEe4QVQZd5ThR5U1-fnuF7ENE'
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  ''
+
+if (!IOS_ANON_KEY) {
+  console.error('ERROR: SUPABASE_ANON_KEY not set in .env.local')
+  process.exit(1)
+}
 
 async function main() {
   console.log('=== iOS Data Access Test (anon key from Secrets.xcconfig) ===\n')

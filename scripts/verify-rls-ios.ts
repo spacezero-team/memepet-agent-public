@@ -38,12 +38,16 @@ const supabaseUrl =
 
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
-// iOS anon key (from Secrets.xcconfig in the iOS repo)
+// iOS anon key (set SUPABASE_ANON_KEY in .env.local)
 const ANON_KEY =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   process.env.SUPABASE_ANON_KEY ||
-  // Hardcoded fallback matching Secrets.xcconfig for this Supabase project
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImliZW9xc3VpcXV1dmlwc2htcHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTUxMjYyMTEsImV4cCI6MjAxMDcwMjIxMX0.FacsD9CIiy_hNwkac-aEe4QVQZd5ThR5U1-fnuF7ENE'
+  ''
+
+if (!ANON_KEY) {
+  console.error('ERROR: SUPABASE_ANON_KEY not set in .env.local')
+  process.exit(1)
+}
 
 // ---------------------------------------------------------------------------
 // 3. Clients
