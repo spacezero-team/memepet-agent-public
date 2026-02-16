@@ -18,7 +18,7 @@ interface RawPetRow {
 export function buildPersonalityFromRow(row: RawPetRow): MemePetPersonalityData {
   const psyche = (row.psyche ?? {}) as Record<string, unknown>
   const meme = (row.meme ?? {}) as Record<string, unknown>
-  const memePersonality = (meme.personality ?? {}) as Record<string, unknown>
+  const memePersonality = (meme.memePersonality ?? {}) as Record<string, unknown>
   const psycheTraits = (psyche.traits ?? {}) as Record<string, number>
   const speechStyle = (memePersonality.speechStyle ?? {}) as Record<string, unknown>
   const interactionPrefs = (memePersonality.interactionPreferences ?? {}) as Record<string, number>

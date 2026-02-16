@@ -975,7 +975,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
     // Build MemePetPersonalityData from psyche + meme columns
     const psyche = (pet.psyche ?? {}) as Record<string, unknown>
     const meme = (pet.meme ?? {}) as Record<string, unknown>
-    const memePersonality = (meme.personality ?? {}) as Record<string, unknown>
+    const memePersonality = (meme.memePersonality ?? {}) as Record<string, unknown>
     const psycheTraits = (psyche.traits ?? {}) as Record<string, number>
     const speechStyle = (memePersonality.speechStyle ?? {}) as Record<string, unknown>
     const interactionPrefs = (memePersonality.interactionPreferences ?? {}) as Record<string, number>
