@@ -12,6 +12,18 @@ import { AtpAgent, RichText, BlobRef } from '@atproto/api'
 import type { AppBskyFeedPost, AppBskyFeedDefs, AppBskyNotificationListNotifications } from '@atproto/api'
 import { BLUESKY_CONFIG, AT_PROTO_RATE_LIMITS } from '@/lib/config/bluesky.config'
 import { getServiceSupabase } from '@/lib/api/service-supabase'
+import { isPoliticalContent } from '@/lib/workflows/modules/political-filter'
+
+/**
+ * Error thrown when attempting to publish political content.
+ * Acts as a hard guardrail at the publishing layer.
+ */
+export class PoliticalContentBlockedError extends Error {
+  constructor(preview: string) {
+    super(`Political content blocked: "${preview.slice(0, 80)}..."`)
+    this.name = 'PoliticalContentBlockedError'
+  }
+}
 
 // Re-export types for consumers
 export type BlueskyPost = AppBskyFeedDefs.FeedViewPost
@@ -257,10 +269,12 @@ export class BlueskyBotClient {
   }
 
   /**
-   * Create a new post with rich text support (mentions, links, hashtags)
+   * Create a new post with rich text support (mentions, links, hashtags).
+   * Blocks political content at the publishing layer as a hard guardrail.
    */
   async post(text: string, imageBlob?: Uint8Array, imageAlt?: string): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
+    this.ensureNotPolitical(text)
     await this.ensureRateLimit()
     this.ensureCooldown()
 
@@ -297,12 +311,14 @@ export class BlueskyBotClient {
 
   /**
    * Reply to an existing post. Requires both root and parent refs for thread structure.
+   * Blocks political content at the publishing layer as a hard guardrail.
    */
   async reply(
     text: string,
     replyRef: BlueskyReplyRef
   ): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
+    this.ensureNotPolitical(text)
     await this.ensureRateLimit()
     this.ensureCooldown()
 
@@ -328,6 +344,7 @@ export class BlueskyBotClient {
   /**
    * Quote post (repost with commentary).
    * Uses app.bsky.embed.record to embed the quoted post.
+   * Blocks political content at the publishing layer as a hard guardrail.
    */
   async quotePost(
     text: string,
@@ -335,6 +352,7 @@ export class BlueskyBotClient {
     quotedCid: string
   ): Promise<BlueskyPostResult> {
     this.ensureAuthenticated()
+    this.ensureNotPolitical(text)
     await this.ensureRateLimit()
     this.ensureCooldown()
 
@@ -552,6 +570,17 @@ export class BlueskyBotClient {
       throw new Error(
         `Cooldown not met for ${this.config.handle}. Wait ${Math.ceil((minCooldown - elapsed) / 1000)}s`
       )
+    }
+  }
+
+  /**
+   * Hard guardrail: block any political content from being published.
+   * This is the last line of defense — no political text can pass through
+   * regardless of which workflow path calls post/reply/quotePost.
+   */
+  private ensureNotPolitical(text: string): void {
+    if (isPoliticalContent(text)) {
+      throw new PoliticalContentBlockedError(text)
     }
   }
 

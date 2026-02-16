@@ -166,6 +166,19 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
     }) as GeneratedThread | null
 
     if (thread) {
+      // Filter thread posts for political content
+      const hasPoliticalPost = thread.posts.some(p => isPoliticalContent(p.text))
+      if (hasPoliticalPost) {
+        await this.context.run('skip-political-thread', async () => {
+          await this.logActivity({
+            petId,
+            activityType: 'proactive_post_skipped',
+            content: 'Thread contained political content, skipped',
+            metadata: { reason: 'political_thread' }
+          })
+        })
+        return
+      }
       await this.executeThreadPosting(petId, pet, thread, memory)
       return
     }
@@ -182,6 +195,19 @@ export class BlueskyAgentWorkflow implements CraftingWorkflow {
         }
       )
     })
+
+    // Filter generated post for political content
+    if (isPoliticalContent(generatedPost.text)) {
+      await this.context.run('skip-political-proactive', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'proactive_post_skipped',
+          content: 'Generated post contained political content, skipped',
+          metadata: { reason: 'political_generated_post' }
+        })
+      })
+      return
+    }
 
     // Image generation (personality-based probability)
     const imageResult = BLUESKY_CONFIG.FEATURE_FLAGS.IMAGE_GENERATION_ENABLED
@@ -285,6 +311,7 @@ Examples of good self-replies:
 - A dramatic "edit:" or "update:" as if something changed
 
 Keep it under 200 characters. Be casual and funny. Stay in character.
+ABSOLUTELY NEVER mention politics, politicians, elections, or any politically controversial topics.
 Personality type: ${pet.meme_personality.personalityType}
 Humor style: ${pet.meme_personality.memeVoice.humorStyle}
 Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
@@ -437,7 +464,7 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       return
     }
 
-    // Step 2: Political content filter — skip if notification text is political
+    // Step 2: Political content filter — check notification text AND thread root/parent
     const isPolitical = isPoliticalContent(notification.text)
     if (isPolitical) {
       await this.context.run('skip-political-reply', async () => {
@@ -447,6 +474,43 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
           content: `Skipped political content from @${notification.authorHandle}`,
           metadata: {
             reason: 'political_content',
+            inReplyTo: notification.uri,
+            inReplyToAuthor: notification.authorHandle,
+          }
+        })
+      })
+      return
+    }
+
+    // Step 2b: Check thread root/parent post for political content
+    // Even if the mention itself is clean, the thread it's in might be political
+    const threadIsPolitical = await this.context.run('check-thread-political', async () => {
+      const rootUri = notification.rootUri ?? notification.uri
+      if (rootUri === notification.uri) return false
+
+      try {
+        const botClient = await this.createAuthenticatedClient(pet)
+        const rootPost = await botClient.getPost(rootUri)
+        if (!rootPost) return false
+
+        const rootText = ((rootPost.record as Record<string, unknown>)?.text as string) ?? ''
+        const rootEmbed = (rootPost as unknown as Record<string, unknown>).embed as Record<string, unknown> | undefined
+        const embeddedText = rootEmbed ? extractEmbeddedText(rootEmbed) : ''
+        const fullText = embeddedText ? `${rootText} ${embeddedText}` : rootText
+        return isPoliticalContent(fullText)
+      } catch {
+        return false
+      }
+    })
+
+    if (threadIsPolitical) {
+      await this.context.run('skip-political-thread-root', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'reply_skipped',
+          content: `Skipped reply — thread root is political (@${notification.authorHandle})`,
+          metadata: {
+            reason: 'political_thread_root',
             inReplyTo: notification.uri,
             inReplyToAuthor: notification.authorHandle,
           }
@@ -479,6 +543,22 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
           activityType: 'reply_skipped',
           content: `Chose not to engage with @${notification.authorHandle}`,
           metadata: { tone: generatedReply.tone, reason: 'not_worth_engaging' }
+        })
+      })
+      return
+    }
+
+    // Step 4b: Filter generated reply text for political content
+    if (isPoliticalContent(generatedReply.text)) {
+      await this.context.run('skip-political-generated-reply', async () => {
+        await this.logActivity({
+          petId,
+          activityType: 'reply_skipped',
+          content: 'Generated reply contained political content, skipped',
+          metadata: {
+            reason: 'political_generated_reply',
+            inReplyTo: notification.uri,
+          }
         })
       })
       return

@@ -10,25 +10,28 @@
 
 const POLITICAL_KEYWORDS_EN = [
   // US politics - people
-  'trump', 'biden', 'harris', 'desantis', 'obama', 'maga',
-  'president biden', 'president trump', 'first lady',
+  'trump', 'biden', 'harris', 'kamala', 'desantis', 'obama', 'maga',
+  'melania', 'jill biden', 'president biden', 'president trump', 'first lady',
+  'mar-a-lago', 'ivanka', 'kushner',
   // US politics - parties/ideology
   'democrat', 'republican', 'gop', 'liberal', 'conservative',
   'left-wing', 'right-wing', 'far-right', 'far-left',
   // US politics - institutions
-  'congress', 'senate', 'capitol', 'white house', 'supreme court',
+  'congress', 'senate', 'capitol', 'white house', 'supreme court', 'scotus',
   'doj', 'department of justice', 'attorney general',
   // Elections
   'election', 'vote', 'ballot', 'polling', 'primary', 'caucus', 'electoral',
-  'campaign', 'inauguration', 'impeach',
+  'campaign', 'inauguration', 'impeach', 'indictment', 'arraignment',
   // Hot-button issues
-  'abortion', 'pro-life', 'pro-choice', 'gun control', 'second amendment', '2nd amendment',
+  'abortion', 'pro-life', 'pro-choice', 'roe v wade',
+  'gun control', 'second amendment', '2nd amendment',
   'immigration', 'border wall', 'deportation', 'refugee', 'asylum seeker',
   'climate change denial', 'woke', 'anti-woke', 'dei', 'critical race theory', 'crt',
-  'defund police', 'blm', 'antifa', 'proud boys',
+  'defund police', 'blm', 'black lives matter', 'antifa', 'proud boys',
   // International politics
   'putin', 'zelensky', 'xi jinping', 'netanyahu', 'gaza', 'palestine conflict',
-  'sanctions', 'nato',
+  'palestine', 'hamas', 'hezbollah', 'israel',
+  'sanctions', 'nato', 'ukraine war',
   // General political terms
   'partisan', 'bipartisan', 'lobbyist', 'political', 'politician', 'legislation',
   'government shutdown', 'filibuster', 'gerrymandering',
