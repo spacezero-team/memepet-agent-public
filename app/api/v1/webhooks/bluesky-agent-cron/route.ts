@@ -426,17 +426,45 @@ async function ensureVercelDomainsForBots(bots: ReadonlyArray<ActiveBot>): Promi
   const results = await ensureVercelDomains(unconfirmed)
 
   const logger = logWorkflow('BLUESKY_AGENT', 'domain-registration')
+  const newlyRegistered: string[] = []
+
   for (const result of results) {
     if (result.success) {
       confirmedDomains.add(result.handle)
       if (!result.alreadyExists) {
         logger.progress('vercel-domain-added', { handle: result.handle })
+        newlyRegistered.push(result.handle)
       }
     } else {
       logger.api('vercel', 'add-domain', 'error', {
         handle: result.handle,
         message: result.error,
       })
+    }
+  }
+
+  // After new domain registration, refresh handles on Bluesky relay
+  // so the relay re-verifies .well-known/atproto-did and clears handle.invalid
+  if (newlyRegistered.length > 0) {
+    for (const handle of newlyRegistered) {
+      const bot = bots.find(b => b.handle === handle)
+      if (!bot) continue
+      try {
+        const client = new BlueskyBotClient({
+          petId: bot.petId,
+          handle: bot.handle,
+          did: bot.did ?? undefined,
+          appPassword: bot.appPassword,
+        })
+        await client.authenticate()
+        await client.refreshHandle()
+        logger.progress('handle-refreshed', { handle })
+      } catch (err) {
+        logger.api('bluesky', 'refresh-handle', 'error', {
+          handle,
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
   }
 }

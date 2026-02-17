@@ -548,6 +548,20 @@ export class BlueskyBotClient {
     return response.data.feed
   }
 
+  // ─── Identity ────────────────────────────────────────────
+
+  /**
+   * Refresh handle verification on the Bluesky relay.
+   * Call after registering a new Vercel domain so the relay re-checks
+   * the .well-known/atproto-did endpoint and clears handle.invalid.
+   */
+  async refreshHandle(): Promise<void> {
+    this.ensureAuthenticated()
+    await this.agent.com.atproto.identity.updateHandle({
+      handle: this.config.handle,
+    })
+  }
+
   // ─── Private Helpers ──────────────────────────────────────
 
   private ensureAuthenticated(): void {
