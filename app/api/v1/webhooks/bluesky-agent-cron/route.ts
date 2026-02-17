@@ -385,12 +385,12 @@ async function loadPetPersonality(petId: string) {
   const supabase = getServiceSupabase()
   const { data } = await (supabase as any)
     .from('pet')
-    .select('personality_type, psyche, meme')
+    .select('meme')
     .eq('id', petId)
-    .single() as { data: { personality_type: string | null; psyche: Record<string, unknown> | null; meme: Record<string, unknown> | null } | null }
+    .single() as { data: { meme: Record<string, unknown> | null } | null }
 
   if (!data) return null
-  return buildPersonalityFromRow(data)
+  return buildPersonalityFromRow({ personality_type: null, psyche: null, meme: data.meme })
 }
 
 async function shouldPetEngageNow(petId: string): Promise<boolean> {

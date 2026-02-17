@@ -1114,12 +1114,12 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
   private async loadPetData(petId: string): Promise<PetData> {
     const supabase = getServiceSupabase()
 
-    // Load pet with both psyche (emotional state) and meme (personality/voice) columns
+    // Load pet with meme column (personality/voice) — personality_type and psyche may not exist in DB
     const { data: pet, error } = await (supabase as any)
       .from('pet')
-      .select('id, name, personality_type, psyche, meme')
+      .select('id, name, meme')
       .eq('id', petId)
-      .single() as { data: { id: string; name: string; personality_type: string | null; psyche: Record<string, unknown> | null; meme: Record<string, unknown> | null } | null; error: { message: string } | null }
+      .single() as { data: { id: string; name: string; meme: Record<string, unknown> | null } | null; error: { message: string } | null }
 
     if (error || !pet) {
       throw new Error(`Pet ${petId} not found: ${error?.message}`)
@@ -1136,16 +1136,16 @@ Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       throw new Error(`No Bluesky bot config for pet ${petId}`)
     }
 
-    // Build MemePetPersonalityData from psyche + meme columns
-    const psyche = (pet.psyche ?? {}) as Record<string, unknown>
+    // Build MemePetPersonalityData from meme column (all personality data lives here)
     const meme = (pet.meme ?? {}) as Record<string, unknown>
     const memePersonality = (meme.memePersonality ?? {}) as Record<string, unknown>
+    const psyche = (meme.psyche ?? {}) as Record<string, unknown>
     const psycheTraits = (psyche.traits ?? {}) as Record<string, number>
     const speechStyle = (memePersonality.speechStyle ?? {}) as Record<string, unknown>
     const interactionPrefs = (memePersonality.interactionPreferences ?? {}) as Record<string, number>
 
     const personality: MemePetPersonalityData = {
-      personalityType: pet.personality_type ?? (memePersonality.archetype as string) ?? 'unknown',
+      personalityType: (memePersonality.archetype as string) ?? 'unknown',
       traits: {
         playfulness: psycheTraits.playfulness ?? 0.5,
         independence: psycheTraits.independence ?? 0,
