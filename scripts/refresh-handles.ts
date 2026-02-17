@@ -25,6 +25,7 @@ for (const line of envContent.split('\n')) {
 
 import { createClient } from '@supabase/supabase-js'
 import { BskyAgent } from '@atproto/api'
+import { decryptIfNeeded } from '../lib/utils/encrypt.js'
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -55,7 +56,7 @@ async function main() {
   for (const bot of activeBots) {
     try {
       const agent = new BskyAgent({ service: 'https://pds.0.space' })
-      await agent.login({ identifier: bot.handle, password: bot.app_password })
+      await agent.login({ identifier: bot.handle, password: decryptIfNeeded(bot.app_password) })
 
       // updateHandle triggers identity re-propagation to the relay
       await agent.com.atproto.identity.updateHandle({ handle: bot.handle })

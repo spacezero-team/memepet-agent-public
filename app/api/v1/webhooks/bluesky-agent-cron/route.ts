@@ -75,8 +75,9 @@ async function handleCron(req: Request) {
 
     // Ensure Vercel domain aliases exist for all active bot handles
     // (fire-and-forget: failures are logged but don't block the cron)
-    ensureVercelDomainsForBots(activeBots).catch(() => {
-      // Silently ignore — individual results are logged inside
+    ensureVercelDomainsForBots(activeBots).catch((error) => {
+      const logger = logWorkflow('BLUESKY_AGENT', 'domain-registration-outer')
+      logger.error(error, 'ensureVercelDomainsForBots')
     })
 
     // ── Proactive Posting ────────────────────────
