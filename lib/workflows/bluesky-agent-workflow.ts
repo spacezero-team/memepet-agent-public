@@ -317,6 +317,9 @@ Humor style: ${pet.meme_personality.memeVoice.humorStyle}
 Catchphrase: "${pet.meme_personality.memeVoice.catchphrase}"`,
       })
 
+      // Skip self-reply if it contains political content
+      if (isPoliticalContent(followUp.text)) return null
+
       // Post as reply to the original post
       const client = await this.createAuthenticatedClient(pet)
       const replyRef: BlueskyReplyRef = {

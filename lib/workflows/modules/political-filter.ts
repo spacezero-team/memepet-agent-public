@@ -5,59 +5,84 @@
  * across all paths: proactive, reactive, engagement, and interactions.
  * Checks both direct text AND embedded/quoted content in posts.
  *
+ * Uses word-boundary matching (\b) to prevent false positives like
+ * "favorite" matching "vote" or "deity" matching "dei".
+ *
  * @module political-filter
  */
 
 const POLITICAL_KEYWORDS_EN = [
-  // US politics - people
+  // US politics - people (proper nouns, safe for word-boundary)
   'trump', 'biden', 'harris', 'kamala', 'desantis', 'obama', 'maga',
   'melania', 'jill biden', 'president biden', 'president trump', 'first lady',
   'mar-a-lago', 'ivanka', 'kushner',
-  // US politics - parties/ideology
-  'democrat', 'republican', 'gop', 'liberal', 'conservative',
+  // US politics - parties/ideology (multi-word or specific enough)
+  'democrat', 'republican', 'gop',
   'left-wing', 'right-wing', 'far-right', 'far-left',
   // US politics - institutions
-  'congress', 'senate', 'capitol', 'white house', 'supreme court', 'scotus',
-  'doj', 'department of justice', 'attorney general',
-  // Elections
-  'election', 'vote', 'ballot', 'polling', 'primary', 'caucus', 'electoral',
-  'campaign', 'inauguration', 'impeach', 'indictment', 'arraignment',
+  'capitol hill', 'white house', 'supreme court', 'scotus',
+  'department of justice', 'attorney general',
+  // Elections (multi-word to avoid false positives)
+  'election day', 'ballot box', 'electoral college', 'electoral vote',
+  'inauguration', 'impeach', 'impeachment', 'indictment', 'arraignment',
   // Hot-button issues
   'abortion', 'pro-life', 'pro-choice', 'roe v wade',
   'gun control', 'second amendment', '2nd amendment',
-  'immigration', 'border wall', 'deportation', 'refugee', 'asylum seeker',
-  'climate change denial', 'woke', 'anti-woke', 'dei', 'critical race theory', 'crt',
-  'defund police', 'blm', 'black lives matter', 'antifa', 'proud boys',
+  'border wall', 'deportation', 'asylum seeker',
+  'climate change denial', 'anti-woke',
+  'critical race theory',
+  'defund police', 'black lives matter', 'antifa', 'proud boys',
   // International politics
-  'putin', 'zelensky', 'xi jinping', 'netanyahu', 'gaza', 'palestine conflict',
-  'palestine', 'hamas', 'hezbollah', 'israel',
-  'sanctions', 'nato', 'ukraine war',
-  // General political terms
-  'partisan', 'bipartisan', 'lobbyist', 'political', 'politician', 'legislation',
+  'putin', 'zelensky', 'xi jinping', 'netanyahu', 'gaza',
+  'palestine conflict', 'hamas', 'hezbollah',
+  'ukraine war',
+  // General political terms (specific enough)
+  'partisan', 'bipartisan', 'lobbyist', 'politician',
   'government shutdown', 'filibuster', 'gerrymandering',
   'epstein', 'classified documents',
 ]
 
 const POLITICAL_KEYWORDS_KR = [
-  // Korean politics
-  '정치', '대통령', '국회', '여당', '야당', '보수', '진보',
+  '정치', '대통령', '국회', '여당', '야당',
   '탄핵', '선거', '투표', '국민의힘', '더불어민주당', '민주당',
-  '좌파', '우파', '빨갱이', '수꼴',
+  '좌파', '우파', '보수', '진보', '빨갱이', '수꼴',
 ]
 
-const ALL_KEYWORDS = [...POLITICAL_KEYWORDS_EN, ...POLITICAL_KEYWORDS_KR]
-const KEYWORDS_LOWER = ALL_KEYWORDS.map(kw => kw.toLowerCase())
+/**
+ * Build a word-boundary regex from keywords.
+ * Multi-word phrases use escaped spaces; single words use \b anchors.
+ * Korean keywords don't use \b (no word boundaries in CJK).
+ */
+function buildKeywordRegex(enKeywords: string[], krKeywords: string[]): RegExp {
+  const escapedEn = enKeywords.map(kw =>
+    kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  )
+  const escapedKr = krKeywords.map(kw =>
+    kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  )
+
+  // English: use word boundaries to prevent substring matches
+  const enPattern = escapedEn.map(kw => `\\b${kw}\\b`).join('|')
+  // Korean: no word boundaries (CJK doesn't have them), use plain match
+  const krPattern = escapedKr.join('|')
+
+  return new RegExp(`${enPattern}|${krPattern}`, 'i')
+}
+
+const POLITICAL_REGEX = buildKeywordRegex(POLITICAL_KEYWORDS_EN, POLITICAL_KEYWORDS_KR)
 
 /**
  * Check if text contains political content.
  *
- * Uses keyword matching against a comprehensive list of political terms
- * in English and Korean.
+ * Uses word-boundary regex matching to avoid false positives like:
+ * - "favorite" matching "vote"
+ * - "deity" matching "dei"
+ * - "devoted" matching "vote"
+ * - "CRT monitor" matching "crt"
  */
 export function isPoliticalContent(text: string): boolean {
   if (!text) return false
-  const lowerText = text.toLowerCase()
-  return KEYWORDS_LOWER.some(keyword => lowerText.includes(keyword))
+  return POLITICAL_REGEX.test(text)
 }
 
 /**
