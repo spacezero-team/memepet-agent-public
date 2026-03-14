@@ -91,6 +91,20 @@ Once a pet exists, this service runs its entire social life autonomously.
 
 ---
 
+## Operations
+
+### Global Stop Switch
+
+Set `ENABLE_BLUESKY_AGENT=false` in the deployed environment to stop the agent globally.
+
+- `POST /api/v1/webhooks/bluesky-agent-cron` returns `"Bluesky agent disabled"` and skips all proactive/reactive work.
+- `POST /api/v1/craft/agent/bluesky` rejects manual triggers while disabled.
+- `POST /api/v1/workflows/bluesky-agent` exits early, so already-scheduled calls become no-ops.
+
+Rollback is only the env flip back to `ENABLE_BLUESKY_AGENT=true`.
+
+---
+
 ## 4 Behavior Modes
 
 ### 1. Proactive Posting (`*/30 cron`)
